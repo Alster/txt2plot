@@ -462,7 +462,7 @@ def main():
             'vpype', '-c', VPYPE_CONFIG,
             'read', str(svg_path),
             # 'linemerge', '--tolerance', '0.5mm',
-            # 'linesort',
+            'linesort',
             'gwrite', '--profile', 'drawcore', str(gcode_path),
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)

@@ -7,10 +7,10 @@
 #   vpype -c vpype.toml read input.svg gwrite --profile drawcore output.gcode
 
 [gwrite.drawcore]
-document_start = "G21\nG17\nG90\nG1 F12000 Z3\n"
-segment_first  = "G1 F12000 Z3\nG0 X{x:.4f} Y{y:.4f}\nG1 F12000 Z5\n"
-segment        = "G1 F14000 X{x:.4f} Y{y:.4f}\n"
-layer_end      = "G1 F12000 Z3\n"
-document_end   = "G1 F12000 Z3\nG0 X0 Y0\n"
+document_start = "G21\nG17\nG90\nG1 F16000 Z3\n"
+segment_first  = "G1 F16000 Z4\nG0 X{x:.4f} Y{y:.4f}\nG1 F16000 Z5\n"
+segment        = "G1 F20000 X{x:.4f} Y{y:.4f}\n"
+layer_end      = "G1 F16000 Z3\n"
+document_end   = "G1 F16000 Z3\nG0 X0 Y0\n"
 unit           = "mm"
 vertical_flip  = true

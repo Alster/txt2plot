@@ -16,7 +16,7 @@ def pen_up(s):
     s.write(b'$X\n')       # unlock
     time.sleep(0.3)
     s.reset_input_buffer()
-    s.write(b'G1 F12000 Z3\n')
+    s.write(b'G1 F16000 Z3\n')
     s.write(b'G53 G0 X0 Y0\n')
     s.readline()
 
@@ -68,7 +68,7 @@ def send_gcode(gcode_lines):
         sys.exit(1)
 
     # Pen up and go home
-    for cmd in ['G1 F12000 Z3\n', 'G53 G0 X0 Y0\n']:
+    for cmd in ['G1 F16000 Z3\n', 'G53 G0 X0 Y0\n']:
         s.write(cmd.encode())
         s.readline()
 
