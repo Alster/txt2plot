@@ -22,6 +22,7 @@ Examples:
     python3 text_to_gcode.py poem.txt --size 6 --line-height 9 --svg-only
 """
 
+import re
 import argparse
 import subprocess
 import xml.etree.ElementTree as ET
@@ -80,6 +81,11 @@ def parse_svg_font(font_path: str) -> tuple[dict, dict]:
     return glyphs, font_face
 
 
+# Matches list markers like "1. ", "1.2 ", "1.2. ", "   2.1 " at the start of a line.
+# Requires at least one dot, tolerates leading whitespace and optional trailing dot.
+_LIST_MARKER = re.compile(r'^\s*(\d+\.)+\d*\s+')
+
+
 # ---------------------------------------------------------------------------
 # Text layout
 # ---------------------------------------------------------------------------
@@ -94,52 +100,136 @@ def measure_line(text: str, glyphs: dict, scale: float, fallback_advance: float)
 
 
 def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
-              fallback_advance: float) -> list[str]:
+              fallback_advance: float) -> list:
     """Word-wrap text into lines that fit within max_width_mm.
 
-    Lines that already fit are kept exactly as-is, preserving leading spaces
-    and multiple consecutive spaces. Only lines that exceed max_width_mm are
-    reflowed (spaces collapsed, which is acceptable for prose paragraphs).
-    Blank lines (paragraph breaks) are preserved.
+    Returns a list where each element is one of:
+      (str, float)              — normal line: text and indent_mm
+      (list[tuple[str,float]], 0.0) — column row: [(name, x_offset_from_margin), ...]
+
+    List items ("1. ", "1.2 ", etc.):
+      - First line starts at margin (indent=0).
+      - Wrapped continuation lines get hanging indent = marker width + extra.
+
+    Name blocks (!імена marker):
+      - '!імена' (with any leading whitespace) opens a name block.
+      - Lines indented deeper than the marker line are collected as names.
+      - A blank line or any line with indent ≤ the marker closes the block.
+      - Names are arranged into as many columns as the available width allows.
+
+    The 'extra' indent (2 space widths) visually distinguishes wrapped lines
+    from new sentences at the same indent level, and positions name columns
+    visually inside the list item text.
     """
-    all_lines = []
+    all_lines: list = []
+    space_w = (glyphs[' ']['advance'] if ' ' in glyphs else fallback_advance) * scale
+    extra_mm = space_w * 2   # extra indent for wrapped/continuation lines
+    current_list_indent = 0.0
+    current_marker_len  = 0
+    name_buffer: list[str] = []
+    in_names_block    = False
+    names_block_indent = 0    # leading-space count of the !імена marker line
 
-    for paragraph in text.split('\n'):
-        if not paragraph.strip():
-            all_lines.append('')
-            continue
+    def flush_names() -> None:
+        if not name_buffer:
+            return
+        indent = current_list_indent + extra_mm
+        avail  = max_width_mm - indent
+        col_w  = max(measure_line(n, glyphs, scale, fallback_advance) for n in name_buffer)
+        col_gap = space_w * 3
+        n_cols  = max(1, int((avail + col_gap) / (col_w + col_gap)))
+        for i in range(0, len(name_buffer), n_cols):
+            row = name_buffer[i : i + n_cols]
+            items = [(name, indent + j * (col_w + col_gap)) for j, name in enumerate(row)]
+            all_lines.append((items, 0.0))
+        name_buffer.clear()
 
-        # Line fits — keep it verbatim (preserves indentation and spacing)
-        if measure_line(paragraph, glyphs, scale, fallback_advance) <= max_width_mm:
-            all_lines.append(paragraph)
-            continue
-
-        # Line too long — reflow by words
-        space_w = (glyphs[' ']['advance'] if ' ' in glyphs else fallback_advance) * scale
-        words = paragraph.split()
+    def reflow(para: str, first_indent: float, cont_indent: float) -> None:
+        words = para.split()
         cur_words: list[str] = []
         cur_width = 0.0
-
+        first_line = True
         for word in words:
             word_w = measure_line(word, glyphs, scale, fallback_advance)
+            avail = max_width_mm - (first_indent if first_line else cont_indent)
             if not cur_words:
                 cur_words = [word]
                 cur_width = word_w
-            elif cur_width + space_w + word_w <= max_width_mm:
+            elif cur_width + space_w + word_w <= avail:
                 cur_words.append(word)
                 cur_width += space_w + word_w
             else:
-                all_lines.append(' '.join(cur_words))
+                all_lines.append((' '.join(cur_words), first_indent if first_line else cont_indent))
+                first_line = False
                 cur_words = [word]
                 cur_width = word_w
-
         if cur_words:
-            all_lines.append(' '.join(cur_words))
+            all_lines.append((' '.join(cur_words), first_indent if first_line else cont_indent))
 
+    for paragraph in text.split('\n'):
+        if not paragraph.strip():
+            flush_names()
+            in_names_block = False
+            all_lines.append(('', 0.0))
+            current_list_indent = 0.0
+            current_marker_len  = 0
+            continue
+
+        m = _LIST_MARKER.match(paragraph)
+
+        stripped = paragraph.strip()
+
+        if stripped == '!імена':
+            in_names_block     = True
+            names_block_indent = len(paragraph) - len(paragraph.lstrip())
+            continue
+
+        if in_names_block:
+            leading = len(paragraph) - len(paragraph.lstrip())
+            if leading > names_block_indent:
+                name_buffer.append(stripped)
+                continue
+            # indent ≤ marker → block ended; flush and fall through
+            in_names_block = False
+            flush_names()
+
+        if m:
+            current_list_indent = measure_line(m.group(0), glyphs, scale, fallback_advance)
+            current_marker_len  = len(m.group(0))
+            cont_indent = current_list_indent + extra_mm
+            if measure_line(paragraph, glyphs, scale, fallback_advance) <= max_width_mm:
+                all_lines.append((paragraph, 0.0))
+            else:
+                reflow(paragraph, 0.0, cont_indent)
+
+        elif paragraph != paragraph.lstrip() and current_list_indent > 0:
+            leading      = len(paragraph) - len(paragraph.lstrip())
+            stripped_line = paragraph.lstrip()
+            # Scale indent proportionally to nesting depth in source:
+            # base indent = current_list_indent (1 marker-length of leading spaces),
+            # each extra marker-length of spaces adds another current_list_indent.
+            level        = leading / current_marker_len if current_marker_len else 1.0
+            out_indent   = level * current_list_indent
+            cont_indent  = out_indent + extra_mm
+            if '  ' in stripped_line:
+                all_lines.append((stripped_line, cont_indent))
+            elif measure_line(stripped_line, glyphs, scale, fallback_advance) <= max_width_mm - out_indent:
+                all_lines.append((stripped_line, out_indent))
+            else:
+                reflow(stripped_line, out_indent, cont_indent)
+
+        else:
+            current_list_indent = 0.0
+            if measure_line(paragraph, glyphs, scale, fallback_advance) <= max_width_mm:
+                all_lines.append((paragraph, 0.0))
+            else:
+                reflow(paragraph, 0.0, 0.0)
+
+    flush_names()
     return all_lines
 
 
-def split_pages(lines: list[str], lines_per_page: int) -> list[list[str]]:
+def split_pages(lines: list, lines_per_page: int) -> list[list]:
     """Split a flat list of lines into page-sized chunks."""
     pages = []
     for i in range(0, len(lines), lines_per_page):
@@ -151,7 +241,7 @@ def split_pages(lines: list[str], lines_per_page: int) -> list[list[str]]:
 # SVG rendering
 # ---------------------------------------------------------------------------
 
-def render_svg(page_lines: list[str], glyphs: dict, font_face: dict,
+def render_svg(page_lines: list[tuple[str, float]], glyphs: dict, font_face: dict,
                font_size_mm: float, line_height_mm: float, line_gap_mm: float,
                margin_left: float, margin_top: float,
                layout_width: float, layout_height: float,
@@ -188,41 +278,38 @@ def render_svg(page_lines: list[str], glyphs: dict, font_face: dict,
     path_els = []
     baseline_y = margin_top + line_height_mm + line_offset * advance
 
-    for line in page_lines:
-        cursor_x = margin_left
-
-        for ch in line:
+    def render_chars(chars: str, start_x: float) -> None:
+        """Render a string of characters starting at start_x, appending to path_els."""
+        cx = start_x
+        for ch in chars:
             glyph = glyphs.get(ch)
-
             if glyph is None:
                 sp = glyphs.get(' ')
-                cursor_x += (sp['advance'] if sp else fallback_advance) * scale
+                cx += (sp['advance'] if sp else fallback_advance) * scale
                 continue
-
             if glyph['d']:
                 s = scale
                 if landscape:
-                    # matrix(a,b,c,d,e,f): font (u,v) → svg (a*u+c*v+e, b*u+d*v+f)
-                    e  = f"{baseline_y:.4f}"
-                    f_ = f"{layout_width - cursor_x:.4f}"
-                    ns = f"{-s:.6f}"
-                    transform = f"matrix(0,{ns},{ns},0,{e},{f_})"
+                    transform = (f"matrix(0,{-s:.6f},{-s:.6f},0,"
+                                 f"{baseline_y:.4f},{layout_width - cx:.4f})")
                 else:
-                    tx = f"{cursor_x:.4f}"
-                    ty = f"{baseline_y:.4f}"
-                    ps = f"{s:.6f}"
-                    ns = f"{-s:.6f}"
-                    transform = f"translate({tx},{ty}) scale({ps},{ns})"
-
+                    transform = (f"translate({cx:.4f},{baseline_y:.4f})"
+                                 f" scale({s:.6f},{-s:.6f})")
                 path_els.append(
-                    f'<path d="{glyph["d"]}"'
-                    f' transform="{transform}"'
+                    f'<path d="{glyph["d"]}" transform="{transform}"'
                     f' fill="none" stroke="black" stroke-width="10"'
                     f' stroke-linecap="round" stroke-linejoin="round"/>'
                 )
+            cx += glyph['advance'] * scale
 
-            cursor_x += glyph['advance'] * scale
-
+    for item in page_lines:
+        text_or_cols, indent_mm = item
+        if isinstance(text_or_cols, list):
+            # Column row: [(name, x_offset_from_margin), ...]
+            for name, x_offset in text_or_cols:
+                render_chars(name, margin_left + x_offset)
+        else:
+            render_chars(text_or_cols, margin_left + indent_mm)
         baseline_y += advance
 
     body = "\n  ".join(path_els)
