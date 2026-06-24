@@ -26,25 +26,25 @@ CALIBRATION_GCODE = [
     'G1 F16000 Z5',
     'G1 F20000 X10 Y10',
     'G1 F20000 X10 Y18',
-    'G1 F16000 Z3',
+    'G1 F16000 Z2',
     # Top-left
     'G0 X18 Y287',
     'G1 F16000 Z5',
     'G1 F20000 X10 Y287',
     'G1 F20000 X10 Y279',
-    'G1 F16000 Z3',
+    'G1 F16000 Z2',
     # Bottom-right
     'G0 X192 Y10',
     'G1 F16000 Z5',
     'G1 F20000 X200 Y10',
     'G1 F20000 X200 Y18',
-    'G1 F16000 Z3',
+    'G1 F16000 Z2',
     # Top-right
     'G0 X192 Y287',
     'G1 F16000 Z5',
     'G1 F20000 X200 Y287',
     'G1 F20000 X200 Y279',
-    'G1 F16000 Z3',
+    'G1 F16000 Z2',
     # Return home
     'G0 X0 Y0',
 ]
@@ -124,7 +124,7 @@ def main():
 
     # Move to current work (0, 0) so the user can see where zero is
     print('Moving to current work origin (0, 0) ...')
-    send(s, 'G1 F16000 Z3')       # pen up
+    send(s, 'G1 F16000 Z2')       # pen up
     send(s, 'G0 X0 Y0')           # go to work zero
     wait_idle(s)
 
@@ -142,13 +142,13 @@ def main():
             cmd = input('> ').strip().lower()
         except (KeyboardInterrupt, EOFError):
             print('\nCancelled — nothing was saved.')
-            send(s, 'G1 F16000 Z3')   # pen up before exit
+            send(s, 'G1 F16000 Z2')   # pen up before exit
             s.close()
             sys.exit(0)
 
         if cmd == 's':
             send(s, 'G10 L20 P1 X0 Y0')
-            send(s, 'G1 F16000 Z3')   # pen up before exit
+            send(s, 'G1 F16000 Z2')   # pen up before exit
             g54  = get_g54(s)
             mx, my = get_mpos(s, g54)
             print(f'Saved. New G54 offset: X={g54[0]:.3f}  Y={g54[1]:.3f}')
