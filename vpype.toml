@@ -1,0 +1,16 @@
+# vpype profile for DrawCore V2.21 (GRBL 1.1h) pen plotter
+#
+# Copy to ~/.config/vpype/vpype.toml  (Linux/macOS)
+#       or %APPDATA%\vpype\vpype.toml  (Windows)
+#
+# Usage:
+#   vpype -c vpype.toml read input.svg gwrite --profile drawcore output.gcode
+
+[gwrite.drawcore]
+document_start = "G21\nG17\nG90\nG1 F12000 Z3\n"
+segment_first  = "G1 F12000 Z3\nG0 X{x:.4f} Y{y:.4f}\nG1 F12000 Z5\n"
+segment        = "G1 F14000 X{x:.4f} Y{y:.4f}\n"
+layer_end      = "G1 F12000 Z3\n"
+document_end   = "G1 F12000 Z3\nG0 X0 Y0\n"
+unit           = "mm"
+vertical_flip  = true
