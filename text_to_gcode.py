@@ -97,9 +97,11 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
               fallback_advance: float) -> list[str]:
     """Word-wrap text into lines that fit within max_width_mm.
 
-    Preserves blank lines (paragraph breaks).
+    Lines that already fit are kept exactly as-is, preserving leading spaces
+    and multiple consecutive spaces. Only lines that exceed max_width_mm are
+    reflowed (spaces collapsed, which is acceptable for prose paragraphs).
+    Blank lines (paragraph breaks) are preserved.
     """
-    space_w = (glyphs[' ']['advance'] if ' ' in glyphs else fallback_advance) * scale
     all_lines = []
 
     for paragraph in text.split('\n'):
@@ -107,6 +109,13 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
             all_lines.append('')
             continue
 
+        # Line fits — keep it verbatim (preserves indentation and spacing)
+        if measure_line(paragraph, glyphs, scale, fallback_advance) <= max_width_mm:
+            all_lines.append(paragraph)
+            continue
+
+        # Line too long — reflow by words
+        space_w = (glyphs[' ']['advance'] if ' ' in glyphs else fallback_advance) * scale
         words = paragraph.split()
         cur_words: list[str] = []
         cur_width = 0.0
