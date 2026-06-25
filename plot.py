@@ -4,6 +4,19 @@
 import sys
 import serial
 import time
+import threading
+
+_enter_event = threading.Event()
+
+
+def _kb_watcher():
+    """Signal _enter_event on each Enter key press."""
+    while True:
+        try:
+            sys.stdin.readline()
+        except Exception:
+            return
+        _enter_event.set()
 
 PORT = '/dev/ttyACM0'
 BAUD = 115200
@@ -41,6 +54,10 @@ def send_gcode(gcode_lines):
     total     = len(gcode_lines)
     queue     = []   # (bytes_in_cmd,)
 
+    threading.Thread(target=_kb_watcher, daemon=True).start()
+    print('Press Enter to pause / resume.', flush=True)
+    last_pct = -1
+
     try:
         while confirmed < total:
             # Feed as many lines as fit in GRBL buffer
@@ -58,8 +75,34 @@ def send_gcode(gcode_lines):
             if resp == 'ok' or resp.startswith('error'):
                 buf_used -= queue.pop(0)
                 confirmed += 1
-                if confirmed % 100 == 0:
-                    print(f'  {confirmed}/{total}', flush=True)
+                pct = confirmed * 100 // total
+                if pct != last_pct:
+                    print(f'  {pct}%', flush=True)
+                    last_pct = pct
+
+            # Pause/resume on Enter
+            if _enter_event.is_set():
+                _enter_event.clear()
+                s.write(b'!')           # feed hold — decelerate to stop
+                time.sleep(0.3)
+                s.write(b'\x18')        # soft-reset — clear GRBL queue
+                time.sleep(1.5)
+                s.write(b'$X\n')        # unlock
+                time.sleep(0.3)
+                s.reset_input_buffer()
+                s.write(b'G1 F16000 Z2\n')  # raise pen
+                s.readline()
+                # Rewind buffer tracking to last confirmed command
+                queue.clear()
+                buf_used = 0
+                sent = confirmed
+                print(f'\nПауза на {confirmed / total * 100:.0f}%. Натисніть Enter щоб продовжити...', flush=True)
+                _enter_event.wait()     # block until second Enter
+                _enter_event.clear()
+                s.write(b'$X\n')        # unlock after adjustments
+                time.sleep(0.3)
+                s.reset_input_buffer()
+                print('Продовжую...', flush=True)
 
     except KeyboardInterrupt:
         print('\nInterrupted — raising pen...', flush=True)

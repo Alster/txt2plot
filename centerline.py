@@ -948,6 +948,8 @@ def main():
         chars += [chr(c) for c in range(0x0400, 0x0500) if chr(c).isprintable()]
         # Basic Latin extended — accented characters common in Ukrainian
         chars += [chr(c) for c in range(0xC0, 0x180) if chr(c).isprintable()]
+        # Letterlike symbols used in Ukrainian typography
+        chars += ['№']
 
     # Load font
     tt    = TTFont(font_path)

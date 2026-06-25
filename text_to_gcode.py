@@ -90,17 +90,18 @@ _LIST_MARKER = re.compile(r'^\s*(\d+\.)+\d*\s+')
 # Text layout
 # ---------------------------------------------------------------------------
 
-def measure_line(text: str, glyphs: dict, scale: float, fallback_advance: float) -> float:
+def measure_line(text: str, glyphs: dict, scale: float, fallback_advance: float,
+                 letter_spacing: float = 0.0) -> float:
     """Measure rendered width of a text line in mm."""
     width = 0.0
     for ch in text:
         g = glyphs.get(ch) or glyphs.get(' ')
-        width += (g['advance'] if g else fallback_advance) * scale
+        width += (g['advance'] if g else fallback_advance) * scale + letter_spacing
     return width
 
 
 def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
-              fallback_advance: float) -> list:
+              fallback_advance: float, letter_spacing: float = 0.0) -> list:
     """Word-wrap text into lines that fit within max_width_mm.
 
     Returns a list where each element is one of:
@@ -122,7 +123,7 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
     visually inside the list item text.
     """
     all_lines: list = []
-    space_w = (glyphs[' ']['advance'] if ' ' in glyphs else fallback_advance) * scale
+    space_w = (glyphs[' ']['advance'] if ' ' in glyphs else fallback_advance) * scale + letter_spacing
     extra_mm = space_w * 2   # extra indent for wrapped/continuation lines
     current_list_indent = 0.0
     current_marker_len  = 0
@@ -135,7 +136,7 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
             return
         indent = current_list_indent + extra_mm
         avail  = max_width_mm - indent
-        col_w  = max(measure_line(n, glyphs, scale, fallback_advance) for n in name_buffer)
+        col_w  = max(measure_line(n, glyphs, scale, fallback_advance, letter_spacing) for n in name_buffer)
         col_gap = space_w * 3
         n_cols  = max(1, int((avail + col_gap) / (col_w + col_gap)))
         for i in range(0, len(name_buffer), n_cols):
@@ -150,7 +151,7 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
         cur_width = 0.0
         first_line = True
         for word in words:
-            word_w = measure_line(word, glyphs, scale, fallback_advance)
+            word_w = measure_line(word, glyphs, scale, fallback_advance, letter_spacing)
             avail = max_width_mm - (first_indent if first_line else cont_indent)
             if not cur_words:
                 cur_words = [word]
@@ -194,10 +195,10 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
             flush_names()
 
         if m:
-            current_list_indent = measure_line(m.group(0), glyphs, scale, fallback_advance)
+            current_list_indent = measure_line(m.group(0), glyphs, scale, fallback_advance, letter_spacing)
             current_marker_len  = len(m.group(0))
             cont_indent = current_list_indent + extra_mm
-            if measure_line(paragraph, glyphs, scale, fallback_advance) <= max_width_mm:
+            if measure_line(paragraph, glyphs, scale, fallback_advance, letter_spacing) <= max_width_mm:
                 all_lines.append((paragraph, 0.0))
             else:
                 reflow(paragraph, 0.0, cont_indent)
@@ -213,14 +214,14 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
             cont_indent  = out_indent + extra_mm
             if '  ' in stripped_line:
                 all_lines.append((stripped_line, cont_indent))
-            elif measure_line(stripped_line, glyphs, scale, fallback_advance) <= max_width_mm - out_indent:
+            elif measure_line(stripped_line, glyphs, scale, fallback_advance, letter_spacing) <= max_width_mm - out_indent:
                 all_lines.append((stripped_line, out_indent))
             else:
                 reflow(stripped_line, out_indent, cont_indent)
 
         else:
             current_list_indent = 0.0
-            if measure_line(paragraph, glyphs, scale, fallback_advance) <= max_width_mm:
+            if measure_line(paragraph, glyphs, scale, fallback_advance, letter_spacing) <= max_width_mm:
                 all_lines.append((paragraph, 0.0))
             else:
                 reflow(paragraph, 0.0, 0.0)
@@ -246,7 +247,7 @@ def render_svg(page_lines: list[tuple[str, float]], glyphs: dict, font_face: dic
                margin_left: float, margin_top: float,
                layout_width: float, layout_height: float,
                fallback_advance: float, landscape: bool = False,
-               line_offset: int = 0) -> str:
+               line_offset: int = 0, letter_spacing: float = 0.0) -> str:
     """Render one page of text as an SVG string.
 
     layout_width/layout_height are the text-area dimensions in reading
@@ -285,7 +286,7 @@ def render_svg(page_lines: list[tuple[str, float]], glyphs: dict, font_face: dic
             glyph = glyphs.get(ch)
             if glyph is None:
                 sp = glyphs.get(' ')
-                cx += (sp['advance'] if sp else fallback_advance) * scale
+                cx += (sp['advance'] if sp else fallback_advance) * scale + letter_spacing
                 continue
             if glyph['d']:
                 s = scale
@@ -300,7 +301,7 @@ def render_svg(page_lines: list[tuple[str, float]], glyphs: dict, font_face: dic
                     f' fill="none" stroke="black" stroke-width="10"'
                     f' stroke-linecap="round" stroke-linejoin="round"/>'
                 )
-            cx += glyph['advance'] * scale
+            cx += glyph['advance'] * scale + letter_spacing
 
     for item in page_lines:
         text_or_cols, indent_mm = item
@@ -419,10 +420,14 @@ def main():
           f"{lines_per_page} lines/page")
 
     # ── Wrap & paginate ────────────────────────────────────────────────────
-    all_lines = wrap_text(text, text_width, glyphs, scale, fallback_advance)
-    pages = split_pages(all_lines, lines_per_page)
-
     start_line = args.start_line
+    letter_spacing = args.size * 0.1
+    all_lines = wrap_text(text, text_width, glyphs, scale, fallback_advance, letter_spacing=letter_spacing)
+    if start_line:
+        first_cap = lines_per_page - start_line
+        pages = [all_lines[:first_cap]] + split_pages(all_lines[first_cap:], lines_per_page)
+    else:
+        pages = split_pages(all_lines, lines_per_page)
     if start_line:
         print(f"Lines: {len(all_lines)} total → {len(pages)} page(s)  "
               f"(page 1 starts from line {start_line})")
@@ -451,6 +456,7 @@ def main():
             fallback_advance = fallback_advance,
             landscape      = landscape,
             line_offset    = start_line if page_num == 1 else 0,
+            letter_spacing = letter_spacing,
         )
         svg_path.write_text(svg, encoding='utf-8')
         print(f"  [{page_num}/{len(pages)}] SVG  → {svg_path}")
