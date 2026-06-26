@@ -85,10 +85,39 @@ def parse_svg_font(font_path: str) -> tuple[dict, dict]:
 # Requires at least one dot, tolerates leading whitespace and optional trailing dot.
 _LIST_MARKER = re.compile(r'^\s*(\d+\.)+\d*\s+')
 
+_KEYWORD_PREFIXES = ('БОЙОВЕ РОЗПОРЯДЖЕННЯ', 'БОЙОВИЙ НАКАЗ')
+
 
 # ---------------------------------------------------------------------------
 # Text layout
 # ---------------------------------------------------------------------------
+
+def adjust_keyword_lines(lines: list, extra_indent: float = 0.0) -> list:
+    """Push БОЙОВЕ РОЗПОРЯДЖЕННЯ / БОЙОВИЙ НАКАЗ lines to odd (1-indexed) positions.
+
+    If such a line falls on an even position, the last word of the preceding line
+    is moved to a new line directly above, shifting the keyword to an odd position.
+    The moved word inherits the indent of its source line, matching the appearance
+    of a word that simply didn't fit on the previous line.
+    """
+    result = list(lines)
+    i = 0
+    while i < len(result):
+        item = result[i]
+        if (isinstance(item[0], str)
+                and any(item[0].startswith(kw) for kw in _KEYWORD_PREFIXES)
+                and (i + 1) % 2 == 0):          # 1-indexed even position
+            if i > 0 and isinstance(result[i - 1][0], str):
+                prev_text, prev_indent = result[i - 1]
+                words = prev_text.split()
+                if len(words) > 1:
+                    result[i - 1] = (' '.join(words[:-1]), prev_indent)
+                    result.insert(i, (words[-1], prev_indent + extra_indent))
+                    i += 2                       # skip inserted line + keyword
+                    continue
+        i += 1
+    return result
+
 
 def measure_line(text: str, glyphs: dict, scale: float, fallback_advance: float,
                  letter_spacing: float = 0.0) -> float:
@@ -423,6 +452,8 @@ def main():
     start_line = args.start_line
     letter_spacing = args.size * 0.1
     all_lines = wrap_text(text, text_width, glyphs, scale, fallback_advance, letter_spacing=letter_spacing)
+    space_w = (glyphs[' ']['advance'] if ' ' in glyphs else fallback_advance) * scale + letter_spacing
+    all_lines = adjust_keyword_lines(all_lines, extra_indent=space_w * 2)
     if start_line:
         first_cap = lines_per_page - start_line
         pages = [all_lines[:first_cap]] + split_pages(all_lines[first_cap:], lines_per_page)
