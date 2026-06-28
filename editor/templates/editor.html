@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<title>Plotter Editor</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    font-family: monospace;
+    font-size: 13px;
+    background: #1e1e1e;
+    color: #ccc;
+  }
+
+  /* ── Top bar ─────────────────────────────────────────────── */
+  #topbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 6px 12px;
+    background: #2a2a2a;
+    border-bottom: 1px solid #3a3a3a;
+    flex-shrink: 0;
+  }
+  #topbar label { color: #888; }
+  #topbar input[type=number] {
+    width: 52px;
+    background: #1e1e1e;
+    border: 1px solid #444;
+    color: #ccc;
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 13px;
+    -moz-appearance: textfield;
+  }
+  #topbar input[type=number]::-webkit-outer-spin-button,
+  #topbar input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+  #status {
+    margin-left: auto;
+    color: #666;
+    font-size: 12px;
+  }
+  #status.ok    { color: #6a6; }
+  #status.error { color: #c55; }
+  #status.busy  { color: #aa8; }
+
+  /* ── Main area ───────────────────────────────────────────── */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Left: textarea ─────────────────────────────────────── */
+  #editor-pane {
+    display: flex;
+    flex-direction: column;
+    width: 45%;
+    min-width: 150px;
+    max-width: 80%;
+  }
+
+  /* ── Resize handle ───────────────────────────────────────── */
+  #resizer {
+    width: 5px;
+    background: #3a3a3a;
+    cursor: col-resize;
+    flex-shrink: 0;
+    transition: background .15s;
+  }
+  #resizer:hover, #resizer.dragging { background: #666; }
+
+  #editor {
+    flex: 1;
+    resize: none;
+    background: #252525;
+    color: #ddd;
+    border: none;
+    padding: 14px;
+    font-family: monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    outline: none;
+  }
+
+  /* ── Right: preview ──────────────────────────────────────── */
+  #preview-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #page-area {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    padding: 16px;
+    background: #1a1a1a;
+  }
+
+  #svg-container {
+    background: #fff;
+    box-shadow: 0 2px 16px rgba(0,0,0,.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  #svg-container svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  #svg-container path {
+    vector-effect: non-scaling-stroke;
+    stroke-width: 1px;
+  }
+  #svg-placeholder {
+    color: #aaa;
+    font-size: 13px;
+    padding: 32px;
+  }
+
+  /* ── Bottom bar ──────────────────────────────────────────── */
+  #bottombar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 12px;
+    background: #2a2a2a;
+    border-top: 1px solid #3a3a3a;
+    flex-shrink: 0;
+  }
+
+  #page-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  #page-nav button {
+    background: #333;
+    border: 1px solid #555;
+    color: #ccc;
+    width: 26px;
+    height: 26px;
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 14px;
+    line-height: 1;
+  }
+  #page-nav button:hover:not(:disabled) { background: #444; }
+  #page-nav button:disabled { opacity: .35; cursor: default; }
+  #page-label { color: #666; }
+  #page-input {
+    width: 42px;
+    background: #1e1e1e;
+    border: 1px solid #444;
+    color: #ccc;
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 13px;
+    text-align: center;
+    -moz-appearance: textfield;
+  }
+  #page-input:focus { outline: none; border-color: #666; }
+  #page-input::-webkit-outer-spin-button,
+  #page-input::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+  #btn-print {
+    background: #2d5a27;
+    border: 1px solid #4a8a40;
+    color: #ccc;
+    padding: 4px 18px;
+    cursor: pointer;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 13px;
+  }
+  #btn-print:hover:not(:disabled) { background: #376b30; }
+  #btn-print:disabled { opacity: .4; cursor: default; }
+
+  #btn-pause {
+    background: #4a4a1a;
+    border: 1px solid #7a7a30;
+    color: #ccc;
+    padding: 4px 14px;
+    cursor: pointer;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 13px;
+  }
+  #btn-pause:hover { background: #5a5a22; }
+
+  #btn-stop {
+    background: #5a2020;
+    border: 1px solid #8a3a3a;
+    color: #ccc;
+    padding: 4px 14px;
+    cursor: pointer;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 13px;
+  }
+  #btn-stop:hover { background: #6e2828; }
+
+  .plot-controls { display: none; gap: 6px; }
+  .plot-controls.active { display: flex; }
+
+  #print-status {
+    flex: 1;
+    text-align: right;
+    font-size: 12px;
+    color: #888;
+    padding-right: 8px;
+  }
+  #print-status.ok    { color: #6a6; }
+  #print-status.error { color: #c55; }
+</style>
+</head>
+<body>
+
+<!-- ── Top bar ──────────────────────────────────────────────── -->
+<div id="topbar">
+  <span>
+    <label>Шрифт:</label>
+    <span style="color:#9ac">{{ cfg.font_path }}</span>
+  </span>
+  <span>
+    <label>Розмір:</label>
+    <span style="color:#9ac">{{ cfg.size }} мм</span>
+  </span>
+  <span>
+    <label>Орієнт.:</label>
+    <span style="color:#9ac">{{ cfg.orientation }}</span>
+  </span>
+
+  <span style="margin-left:16px;">
+    <label for="start-line">Start line:</label>
+    <input type="number" id="start-line" value="0" min="0" max="999">
+  </span>
+
+  <span id="status">—</span>
+</div>
+
+<!-- ── Main ─────────────────────────────────────────────────── -->
+<div id="main">
+
+  <div id="editor-pane">
+    <textarea id="editor" spellcheck="false" placeholder="Введіть текст..."></textarea>
+  </div>
+
+  <div id="resizer"></div>
+
+  <div id="preview-pane">
+    <div id="page-area">
+      <div id="svg-container">
+        <span id="svg-placeholder">Почніть вводити текст</span>
+      </div>
+    </div>
+
+    <!-- ── Bottom bar ─────────────────────────────────────── -->
+    <div id="bottombar">
+      <div id="page-nav">
+        <button id="btn-prev" disabled>&#8249;</button>
+        <input type="number" id="page-input" value="1" min="1" disabled>
+        <span id="page-label">/ —</span>
+        <button id="btn-next" disabled>&#8250;</button>
+      </div>
+
+      <span id="print-status"></span>
+      <button id="btn-print" disabled>Друкувати</button>
+      <div class="plot-controls" id="plot-controls">
+        <button id="btn-pause">Пауза</button>
+        <button id="btn-stop">Стоп</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Config (injected by server)
+// ---------------------------------------------------------------------------
+const LANDSCAPE  = {{ 'true' if cfg.orientation == 'landscape' else 'false' }};
+const SVG_PHYS_W = {{ cfg.layout_h if cfg.orientation == 'landscape' else cfg.layout_w }};
+const SVG_PHYS_H = {{ cfg.layout_w if cfg.orientation == 'landscape' else cfg.layout_h }};
+
+// ---------------------------------------------------------------------------
+// localStorage keys
+// ---------------------------------------------------------------------------
+const EDITOR_WIDTH_KEY = 'plotter-editor-pane-width';
+const EDITOR_TEXT_KEY  = 'plotter-editor-text';
+const EDITOR_PAGE_KEY  = 'plotter-editor-page';
+const EDITOR_SLINE_KEY = 'plotter-editor-start-line';
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let currentPage   = 1;
+let totalPages    = 0;
+let svgCache      = {};
+let debounceTimer = null;
+let isPaused       = false;
+let statusInterval = null;
+
+// ---------------------------------------------------------------------------
+// DOM refs
+// ---------------------------------------------------------------------------
+const editorEl     = document.getElementById('editor');
+const startLineEl  = document.getElementById('start-line');
+const statusEl     = document.getElementById('status');
+const svgContainer = document.getElementById('svg-container');
+const svgPlaceholder = document.getElementById('svg-placeholder');
+const pageAreaEl   = document.getElementById('page-area');
+const pageLabel    = document.getElementById('page-label');
+const pageInput    = document.getElementById('page-input');
+const btnPrev      = document.getElementById('btn-prev');
+const btnNext      = document.getElementById('btn-next');
+const btnPrint     = document.getElementById('btn-print');
+const btnPause     = document.getElementById('btn-pause');
+const btnStop      = document.getElementById('btn-stop');
+const plotControls = document.getElementById('plot-controls');
+const printStatus  = document.getElementById('print-status');
+const resizer      = document.getElementById('resizer');
+const editorPane   = document.getElementById('editor-pane');
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function getStartLine() {
+  return parseInt(startLineEl.value, 10) || 0;
+}
+
+async function apiPost(endpoint, data) {
+  const r = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return r.json();
+}
+
+function setStatus(msg, cls = '') {
+  statusEl.textContent = msg;
+  statusEl.className   = cls;
+}
+
+function updateNavButtons() {
+  btnPrev.disabled   = (currentPage <= 1);
+  btnNext.disabled   = (currentPage >= totalPages);
+  pageInput.disabled = (totalPages === 0);
+  pageInput.max      = totalPages || 1;
+  pageInput.value    = totalPages > 0 ? currentPage : 1;
+  pageLabel.textContent = totalPages > 0 ? `/ ${totalPages}` : '/ —';
+  if (btnPrint.style.display !== 'none') btnPrint.disabled = (totalPages === 0);
+}
+
+function showSvg(svg) {
+  svgPlaceholder.style.display = 'none';
+  const old = svgContainer.querySelector('svg');
+  if (old) old.remove();
+  if (!svg) {
+    svgPlaceholder.style.display = '';
+    svgPlaceholder.textContent   = 'Сторінка порожня';
+    return;
+  }
+  const doc   = new DOMParser().parseFromString(svg, 'image/svg+xml');
+  const svgEl = doc.documentElement;
+  svgEl.setAttribute('width',  '100%');
+  svgEl.setAttribute('height', '100%');
+  svgContainer.appendChild(svgEl);
+}
+
+function setPlotting(active) {
+  btnPrint.style.display = active ? 'none' : '';
+  plotControls.classList.toggle('active', active);
+  if (active) {
+    statusInterval = setInterval(async () => {
+      const d = await fetch('/status').then(r => r.json());
+      if (d.line) { printStatus.textContent = d.line; printStatus.className = 'ok'; }
+      if (!d.printing) {
+        clearInterval(statusInterval);
+        statusInterval = null;
+        setPlotting(false);
+        btnPrint.disabled = (totalPages === 0);
+      }
+    }, 2000);
+  } else {
+    clearInterval(statusInterval);
+    statusInterval = null;
+    isPaused = false;
+    btnPause.textContent = 'Пауза';
+  }
+}
+
+function navigateTo(n) {
+  currentPage = n;
+  updateNavButtons();
+  localStorage.setItem(EDITOR_PAGE_KEY, currentPage);
+  fetchPageSvg(currentPage);
+}
+
+// ---------------------------------------------------------------------------
+// SVG container sizing
+// ---------------------------------------------------------------------------
+// Physical SVG is always portrait (SVG_PHYS_W × SVG_PHYS_H).
+// For landscape we rotate the container 90° CW so text reads horizontally.
+function sizeSvgContainer() {
+  const areaW = pageAreaEl.clientWidth  - 32;
+  const areaH = pageAreaEl.clientHeight - 32;
+  const ratio = LANDSCAPE ? SVG_PHYS_H / SVG_PHYS_W : SVG_PHYS_W / SVG_PHYS_H;
+  let w, h;
+  if (areaW / areaH > ratio) {
+    h = areaH; w = h * ratio;
+  } else {
+    w = areaW; h = w / ratio;
+  }
+  if (LANDSCAPE) {
+    svgContainer.style.width     = h + 'px';
+    svgContainer.style.height    = w + 'px';
+    svgContainer.style.transform = 'rotate(90deg)';
+  } else {
+    svgContainer.style.width     = w + 'px';
+    svgContainer.style.height    = h + 'px';
+    svgContainer.style.transform = '';
+  }
+}
+
+window.addEventListener('resize', sizeSvgContainer);
+
+// ---------------------------------------------------------------------------
+// API calls
+// ---------------------------------------------------------------------------
+async function fetchLayout() {
+  setStatus('layout…', 'busy');
+  try {
+    const d = await apiPost('/layout', { text: editorEl.value, start_line: getStartLine() });
+    totalPages  = d.total_pages;
+    svgCache    = {};
+    currentPage = Math.min(currentPage, Math.max(totalPages, 1));
+    updateNavButtons();
+    localStorage.setItem(EDITOR_PAGE_KEY, currentPage);
+    setStatus(`${d.total_lines} рядків`, 'ok');
+    await fetchPageSvg(currentPage);
+  } catch {
+    setStatus('помилка layout', 'error');
+  }
+}
+
+async function fetchPageSvg(pageNum) {
+  if (svgCache[pageNum] !== undefined) {
+    showSvg(svgCache[pageNum]);
+    return;
+  }
+  setStatus('рендер…', 'busy');
+  try {
+    const d = await apiPost('/page', { text: editorEl.value, start_line: getStartLine(), page_num: pageNum });
+    svgCache[pageNum] = d.svg;
+    if (d.total_pages) { totalPages = d.total_pages; updateNavButtons(); }
+    setStatus(`${totalPages} стор.`, 'ok');
+    if (currentPage === pageNum) showSvg(d.svg);
+  } catch {
+    setStatus('помилка рендеру', 'error');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Event handlers
+// ---------------------------------------------------------------------------
+editorEl.addEventListener('input', () => {
+  localStorage.setItem(EDITOR_TEXT_KEY, editorEl.value);
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(fetchLayout, 400);
+});
+
+startLineEl.addEventListener('change', () => {
+  localStorage.setItem(EDITOR_SLINE_KEY, startLineEl.value);
+  svgCache = {};
+  fetchLayout();
+});
+
+pageInput.addEventListener('change', () => {
+  navigateTo(Math.min(Math.max(parseInt(pageInput.value, 10) || 1, 1), totalPages));
+});
+
+btnPrev.addEventListener('click', () => { if (currentPage > 1)            navigateTo(currentPage - 1); });
+btnNext.addEventListener('click', () => { if (currentPage < totalPages)   navigateTo(currentPage + 1); });
+
+btnPrint.addEventListener('click', async () => {
+  btnPrint.disabled = true;
+  printStatus.textContent = 'Генерую G-code…';
+  printStatus.className   = '';
+  try {
+    const d = await apiPost('/print', { text: editorEl.value, page_num: currentPage, start_line: getStartLine() });
+    if (d.status === 'printing') {
+      printStatus.textContent = `Друкую стор. ${d.page}…`;
+      printStatus.className   = 'ok';
+      setPlotting(true);
+    } else {
+      printStatus.textContent = `Помилка: ${d.message}`;
+      printStatus.className   = 'error';
+      btnPrint.disabled = false;
+    }
+  } catch (e) {
+    printStatus.textContent = `Помилка: ${e.message}`;
+    printStatus.className   = 'error';
+    btnPrint.disabled = false;
+  }
+});
+
+btnPause.addEventListener('click', async () => {
+  try {
+    await apiPost('/pause', {});
+    isPaused = !isPaused;
+    btnPause.textContent    = isPaused ? 'Продовжити' : 'Пауза';
+    printStatus.textContent = isPaused ? 'Пауза' : 'Друкую…';
+    printStatus.className   = isPaused ? 'busy' : 'ok';
+  } catch (e) {
+    printStatus.textContent = `Помилка: ${e.message}`;
+    printStatus.className   = 'error';
+  }
+});
+
+btnStop.addEventListener('click', async () => {
+  try {
+    await apiPost('/stop', {});
+    printStatus.textContent = 'Зупинено';
+    printStatus.className   = '';
+    setPlotting(false);
+    btnPrint.disabled = (totalPages === 0);
+  } catch (e) {
+    printStatus.textContent = `Помилка: ${e.message}`;
+    printStatus.className   = 'error';
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Resizable editor pane
+// ---------------------------------------------------------------------------
+resizer.addEventListener('mousedown', e => {
+  e.preventDefault();
+  resizer.classList.add('dragging');
+  const mainRect = document.getElementById('main').getBoundingClientRect();
+
+  function onMove(e) {
+    const w = Math.min(Math.max(e.clientX - mainRect.left, 150), mainRect.width * 0.8);
+    editorPane.style.width = w + 'px';
+    sizeSvgContainer();
+  }
+  function onUp() {
+    resizer.classList.remove('dragging');
+    localStorage.setItem(EDITOR_WIDTH_KEY, editorPane.style.width);
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup',   onUp);
+  }
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup',   onUp);
+});
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts
+// ---------------------------------------------------------------------------
+document.addEventListener('keydown', e => {
+  if (e.altKey && e.key === 'ArrowLeft')  { btnPrev.click(); e.preventDefault(); }
+  if (e.altKey && e.key === 'ArrowRight') { btnNext.click(); e.preventDefault(); }
+});
+
+// ---------------------------------------------------------------------------
+// Init — restore saved state
+// ---------------------------------------------------------------------------
+const savedText  = localStorage.getItem(EDITOR_TEXT_KEY);
+const savedSline = parseInt(localStorage.getItem(EDITOR_SLINE_KEY), 10) || 0;
+const savedWidth = localStorage.getItem(EDITOR_WIDTH_KEY);
+
+if (savedText)  editorEl.value    = savedText;
+if (savedSline) startLineEl.value = savedSline;
+currentPage = parseInt(localStorage.getItem(EDITOR_PAGE_KEY), 10) || 1;
+
+requestAnimationFrame(() => {
+  if (savedWidth) editorPane.style.width = savedWidth;
+  sizeSvgContainer();
+  if (editorEl.value.trim()) fetchLayout();
+});
+</script>
+</body>
+</html>
