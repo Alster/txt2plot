@@ -111,8 +111,7 @@ def adjust_keyword_lines(lines: list, extra_indent: float = 0.0) -> list:
                 prev_text, prev_indent = result[i - 1]
                 if (prev_text.lower().startswith('капітан')
                         and i >= 2 and isinstance(result[i - 2][0], str)):
-                    # Merge the "капітан …" line onto the line above it; the keyword
-                    # naturally shifts one position up into an odd (1-indexed) slot.
+                    # "капітан" line before keyword → merge it onto the line above.
                     p2_text, p2_indent = result[i - 2]
                     result[i - 2] = (p2_text + ' ' + prev_text, p2_indent)
                     result.pop(i - 1)
@@ -123,6 +122,16 @@ def adjust_keyword_lines(lines: list, extra_indent: float = 0.0) -> list:
                     result.insert(i, (words[-1], prev_indent + extra_indent))
                     i += 2                       # skip inserted line + keyword
                     continue
+        # "капітан" on an even (1-indexed) line and it is the last line → merge onto the previous line.
+        if (isinstance(item[0], str)
+                and item[0].lower().startswith('капітан')
+                and (i + 1) % 2 == 0             # 1-indexed even position
+                and i == len(result) - 1         # last line
+                and i > 0 and isinstance(result[i - 1][0], str)):
+            prev_text, prev_indent = result[i - 1]
+            result[i - 1] = (prev_text + ' ' + item[0], prev_indent)
+            result.pop(i)
+            continue                              # i unchanged → recheck current slot
         i += 1
     return result
 
