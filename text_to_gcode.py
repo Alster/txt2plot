@@ -109,6 +109,14 @@ def adjust_keyword_lines(lines: list, extra_indent: float = 0.0) -> list:
                 and (i + 1) % 2 == 0):          # 1-indexed even position
             if i > 0 and isinstance(result[i - 1][0], str):
                 prev_text, prev_indent = result[i - 1]
+                if (prev_text.lower().startswith('капітан')
+                        and i >= 2 and isinstance(result[i - 2][0], str)):
+                    # Merge the "капітан …" line onto the line above it; the keyword
+                    # naturally shifts one position up into an odd (1-indexed) slot.
+                    p2_text, p2_indent = result[i - 2]
+                    result[i - 2] = (p2_text + ' ' + prev_text, p2_indent)
+                    result.pop(i - 1)
+                    continue                      # i unchanged → now points past keyword
                 words = prev_text.split()
                 if len(words) > 1:
                     result[i - 1] = (' '.join(words[:-1]), prev_indent)
@@ -405,6 +413,9 @@ def main():
                         help='Skip first N lines on page 1 (continue on partially filled page)')
     parser.add_argument('--svg-only', action='store_true',
                         help='Generate SVG files only, skip GCode conversion')
+    parser.add_argument('--page', type=int, default=None, metavar='N',
+                        help='Generate output only for page N (1-indexed). '
+                             'By default all pages are generated.')
     args = parser.parse_args()
 
     if args.line_height is None:
@@ -472,6 +483,8 @@ def main():
     generated_gcodes = []
 
     for page_num, page_lines in enumerate(pages, 1):
+        if args.page is not None and page_num != args.page:
+            continue
         svg_path   = out_dir / f"{args.prefix}_{page_num:04d}.svg"
         gcode_path = out_dir / f"{args.prefix}_{page_num:04d}.gcode"
 
@@ -499,7 +512,7 @@ def main():
             'vpype', '-c', VPYPE_CONFIG,
             'read', str(svg_path),
             # 'linemerge', '--tolerance', '0.5mm',
-            # 'linesort',
+            'linesort',
             'gwrite', '--profile', 'drawcore', str(gcode_path),
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
