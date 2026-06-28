@@ -76,7 +76,7 @@ def send_gcode(gcode_lines):
                 buf_used -= queue.pop(0)
                 confirmed += 1
                 pct = confirmed * 100 // total // 10 * 10
-                if pct != last_pct and pct > 0:
+                if pct != last_pct:
                     print(f'  {pct}%', flush=True)
                     last_pct = pct
 
