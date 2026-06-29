@@ -270,7 +270,7 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
             if measure_line(paragraph, glyphs, scale, fallback_advance, letter_spacing) <= max_width_mm:
                 all_lines.append((paragraph, 0.0))
             else:
-                reflow(paragraph, 0.0, 0.0)
+                reflow(paragraph, 0.0, extra_mm)
 
     flush_names()
     return all_lines
