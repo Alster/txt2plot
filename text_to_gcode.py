@@ -27,6 +27,7 @@ import argparse
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import NamedTuple
 
 # vpype.toml: use local copy next to this script if it exists, otherwise fall
 # back to the user-level config (~/.config/vpype/vpype.toml on Linux/macOS,
@@ -87,12 +88,26 @@ _LIST_MARKER = re.compile(r'^\s*(\d+\.)+\d*\s+')
 
 _KEYWORD_PREFIXES = ('БОЙОВЕ РОЗПОРЯДЖЕННЯ', 'БОЙОВИЙ НАКАЗ')
 
+_DATE_PREFIX = '--дата '
+
+
+class Line(NamedTuple):
+    """A single laid-out line ready for rendering.
+
+    content : plain text string, or list[(name, x_offset_mm)] for a column row.
+    indent  : left offset from margin_left, in mm.
+    date    : optional date string rendered to the left of this line.
+    """
+    content: str | list
+    indent: float
+    date: str | None = None
+
 
 # ---------------------------------------------------------------------------
 # Text layout
 # ---------------------------------------------------------------------------
 
-def adjust_keyword_lines(lines: list, extra_indent: float = 0.0) -> list:
+def adjust_keyword_lines(lines: list[Line], extra_indent: float = 0.0) -> list[Line]:
     """Push БОЙОВЕ РОЗПОРЯДЖЕННЯ / БОЙОВИЙ НАКАЗ lines to odd (1-indexed) positions.
 
     If such a line falls on an even position, the last word of the preceding line
@@ -104,32 +119,32 @@ def adjust_keyword_lines(lines: list, extra_indent: float = 0.0) -> list:
     i = 0
     while i < len(result):
         item = result[i]
-        if (isinstance(item[0], str)
-                and any(item[0].startswith(kw) for kw in _KEYWORD_PREFIXES)
+        if (isinstance(item.content, str)
+                and any(item.content.startswith(kw) for kw in _KEYWORD_PREFIXES)
                 and (i + 1) % 2 == 0):          # 1-indexed even position
-            if i > 0 and isinstance(result[i - 1][0], str):
-                prev_text, prev_indent = result[i - 1]
-                if (prev_text.lower().startswith('капітан')
-                        and i >= 2 and isinstance(result[i - 2][0], str)):
+            if i > 0 and isinstance(result[i - 1].content, str):
+                prev = result[i - 1]
+                if (prev.content.lower().startswith('капітан')
+                        and i >= 2 and isinstance(result[i - 2].content, str)):
                     # "капітан" line before keyword → merge it onto the line above.
-                    p2_text, p2_indent = result[i - 2]
-                    result[i - 2] = (p2_text + ' ' + prev_text, p2_indent)
+                    p2 = result[i - 2]
+                    result[i - 2] = Line(p2.content + ' ' + prev.content, p2.indent, p2.date or prev.date)
                     result.pop(i - 1)
                     continue                      # i unchanged → now points past keyword
-                words = prev_text.split()
+                words = prev.content.split()
                 if len(words) > 1:
-                    result[i - 1] = (' '.join(words[:-1]), prev_indent)
-                    result.insert(i, (words[-1], prev_indent + extra_indent))
+                    result[i - 1] = Line(' '.join(words[:-1]), prev.indent, prev.date)
+                    result.insert(i, Line(words[-1], prev.indent + extra_indent))
                     i += 2                       # skip inserted line + keyword
                     continue
         # "капітан" on an odd (1-indexed) line and it is the last line → merge onto the previous line.
-        if (isinstance(item[0], str)
-                and item[0].lower().startswith('капітан')
+        if (isinstance(item.content, str)
+                and item.content.lower().startswith('капітан')
                 and (i + 1) % 2 != 0             # 1-indexed odd position
                 and i == len(result) - 1         # last line
-                and i > 0 and isinstance(result[i - 1][0], str)):
-            prev_text, prev_indent = result[i - 1]
-            result[i - 1] = (prev_text + ' ' + item[0], prev_indent)
+                and i > 0 and isinstance(result[i - 1].content, str)):
+            prev = result[i - 1]
+            result[i - 1] = Line(prev.content + ' ' + item.content, prev.indent, prev.date or item.date)
             result.pop(i)
             continue                              # i unchanged → recheck current slot
         i += 1
@@ -147,35 +162,49 @@ def measure_line(text: str, glyphs: dict, scale: float, fallback_advance: float,
 
 
 def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
-              fallback_advance: float, letter_spacing: float = 0.0) -> list:
+              fallback_advance: float, letter_spacing: float = 0.0) -> list[Line]:
     """Word-wrap text into lines that fit within max_width_mm.
 
-    Returns a list where each element is one of:
-      (str, float)              — normal line: text and indent_mm
-      (list[tuple[str,float]], 0.0) — column row: [(name, x_offset_from_margin), ...]
+    Returns a list of Line objects. Each Line has:
+      .content : str (text) or list[(name, x_offset_mm)] for a column row.
+      .indent  : left offset from margin_left, in mm.
+      .date    : optional date string from a preceding '--дата ...' directive.
 
     List items ("1. ", "1.2 ", etc.):
       - First line starts at margin (indent=0).
       - Wrapped continuation lines get hanging indent = marker width + extra.
 
-    Name blocks (!імена marker):
-      - '!імена' (with any leading whitespace) opens a name block.
+    Name blocks (--імена marker):
+      - '--імена' (with any leading whitespace) opens a name block.
       - Lines indented deeper than the marker line are collected as names.
       - A blank line or any line with indent ≤ the marker closes the block.
       - Names are arranged into as many columns as the available width allows.
+
+    Date directives ('--дата DATE'):
+      - Removed from the main text flow.
+      - DATE is stored in .date on the next non-blank line.
 
     The 'extra' indent (2 space widths) visually distinguishes wrapped lines
     from new sentences at the same indent level, and positions name columns
     visually inside the list item text.
     """
-    all_lines: list = []
+    all_lines: list[Line] = []
     space_w = (glyphs[' ']['advance'] if ' ' in glyphs else fallback_advance) * scale + letter_spacing
     extra_mm = space_w * 2   # extra indent for wrapped/continuation lines
     current_list_indent = 0.0
     current_marker_len  = 0
     name_buffer: list[str] = []
     in_names_block    = False
-    names_block_indent = 0    # leading-space count of the !імена marker line
+    names_block_indent = 0    # leading-space count of the --імена marker line
+    pending_date: str | None = None  # date annotation for the next content line
+
+    def append_line(content, indent, *, is_blank: bool = False) -> None:
+        nonlocal pending_date
+        if is_blank:
+            all_lines.append(Line(content, indent))
+        else:
+            all_lines.append(Line(content, indent, pending_date))
+            pending_date = None
 
     def flush_names() -> None:
         if not name_buffer:
@@ -188,7 +217,7 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
         for i in range(0, len(name_buffer), n_cols):
             row = name_buffer[i : i + n_cols]
             items = [(name, indent + j * (col_w + col_gap)) for j, name in enumerate(row)]
-            all_lines.append((items, 0.0))
+            all_lines.append(Line(items, 0.0))  # column rows never carry a date
         name_buffer.clear()
 
     def reflow(para: str, first_indent: float, cont_indent: float) -> None:
@@ -206,18 +235,18 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
                 cur_words.append(word)
                 cur_width += space_w + word_w
             else:
-                all_lines.append((' '.join(cur_words), first_indent if first_line else cont_indent))
+                append_line(' '.join(cur_words), first_indent if first_line else cont_indent)
                 first_line = False
                 cur_words = [word]
                 cur_width = word_w
         if cur_words:
-            all_lines.append((' '.join(cur_words), first_indent if first_line else cont_indent))
+            append_line(' '.join(cur_words), first_indent if first_line else cont_indent)
 
     for paragraph in text.split('\n'):
         if not paragraph.strip():
             flush_names()
             in_names_block = False
-            all_lines.append(('', 0.0))
+            append_line('', 0.0, is_blank=True)
             current_list_indent = 0.0
             current_marker_len  = 0
             continue
@@ -226,7 +255,7 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
 
         stripped = paragraph.strip()
 
-        if stripped == '!імена':
+        if stripped == '--імена':
             in_names_block     = True
             names_block_indent = len(paragraph) - len(paragraph.lstrip())
             continue
@@ -240,12 +269,16 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
             in_names_block = False
             flush_names()
 
+        if stripped.startswith(_DATE_PREFIX):
+            pending_date = stripped[len(_DATE_PREFIX):]
+            continue
+
         if m:
             current_list_indent = measure_line(m.group(0), glyphs, scale, fallback_advance, letter_spacing)
             current_marker_len  = len(m.group(0))
             cont_indent = current_list_indent + extra_mm
             if measure_line(paragraph, glyphs, scale, fallback_advance, letter_spacing) <= max_width_mm:
-                all_lines.append((paragraph, 0.0))
+                append_line(paragraph, 0.0)
             else:
                 reflow(paragraph, 0.0, cont_indent)
 
@@ -259,16 +292,16 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
             out_indent   = level * current_list_indent
             cont_indent  = out_indent + extra_mm
             if '  ' in stripped_line:
-                all_lines.append((stripped_line, cont_indent))
+                append_line(stripped_line, cont_indent)
             elif measure_line(stripped_line, glyphs, scale, fallback_advance, letter_spacing) <= max_width_mm - out_indent:
-                all_lines.append((stripped_line, out_indent))
+                append_line(stripped_line, out_indent)
             else:
                 reflow(stripped_line, out_indent, cont_indent)
 
         else:
             current_list_indent = 0.0
             if measure_line(paragraph, glyphs, scale, fallback_advance, letter_spacing) <= max_width_mm:
-                all_lines.append((paragraph, 0.0))
+                append_line(paragraph, 0.0)
             else:
                 reflow(paragraph, 0.0, extra_mm)
 
@@ -288,7 +321,7 @@ def split_pages(lines: list, lines_per_page: int) -> list[list]:
 # SVG rendering
 # ---------------------------------------------------------------------------
 
-def render_svg(page_lines: list[tuple[str, float]], glyphs: dict, font_face: dict,
+def render_svg(page_lines: list[Line], glyphs: dict, font_face: dict,
                font_size_mm: float, line_height_mm: float, line_gap_mm: float,
                margin_left: float, margin_top: float,
                layout_width: float, layout_height: float,
@@ -317,9 +350,8 @@ def render_svg(page_lines: list[tuple[str, float]], glyphs: dict, font_face: dic
       - Content is rotated 90° CCW — turn paper 90° CCW to read.
       - Glyph transform: matrix(0, -s, -s, 0, baseline_y, layout_width - cursor_x)
     """
-    upm    = font_face['upm']
-    ascent = font_face['ascent']
-    scale  = font_size_mm / upm
+    upm   = font_face['upm']
+    scale = font_size_mm / upm
     advance = line_height_mm + line_gap_mm  # fixed per-line advance
 
     path_els = []
@@ -349,14 +381,15 @@ def render_svg(page_lines: list[tuple[str, float]], glyphs: dict, font_face: dic
                 )
             cx += glyph['advance'] * scale + letter_spacing
 
-    for item in page_lines:
-        text_or_cols, indent_mm = item
-        if isinstance(text_or_cols, list):
+    for line in page_lines:
+        if isinstance(line.content, list):
             # Column row: [(name, x_offset_from_margin), ...]
-            for name, x_offset in text_or_cols:
+            for name, x_offset in line.content:
                 render_chars(name, margin_left + x_offset)
         else:
-            render_chars(text_or_cols, margin_left + indent_mm)
+            render_chars(line.content, margin_left + line.indent)
+        if line.date:
+            render_chars(line.date, max(0.0, margin_left - 32.0))
         baseline_y += advance
 
     body = "\n  ".join(path_els)
