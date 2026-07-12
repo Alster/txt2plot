@@ -116,6 +116,8 @@ def adjust_keyword_lines(lines: list[Line], extra_indent: float = 0.0) -> list[L
     of a word that simply didn't fit on the previous line.
     """
     result = list(lines)
+    while result and isinstance(result[-1].content, str) and not result[-1].content.strip():
+        result.pop()
     i = 0
     while i < len(result):
         item = result[i]

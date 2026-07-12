@@ -1,5 +1,7 @@
 # txt2plot — інструменти для пен-плотера на GRBL
 
+![Vibe Coded](https://img.shields.io/badge/vibe-coded-purple?style=for-the-badge&labelColor=yellow)
+
 Набір Python-утиліт для керування пен-плотером на базі GRBL з текстових файлів. Повна підтримка кирилиці (українська мова).
 
 ![Example](./assets/example.jpeg)
