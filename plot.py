@@ -2,11 +2,22 @@
 """Convert SVG pixel-unit G-code to mm and stream to GRBL plotter."""
 
 import sys
+import signal
 import serial
 import time
 import threading
 
 _enter_event = threading.Event()
+
+# On Windows, editor.py's Stop button sends CTRL_BREAK_EVENT (plain SIGINT
+# isn't supported by Popen.send_signal() there). Python has no default
+# handler turning that into KeyboardInterrupt, so register one explicitly —
+# it feeds the same `except KeyboardInterrupt` cleanup below.
+def _raise_keyboard_interrupt(signum, frame):
+    raise KeyboardInterrupt
+
+if sys.platform == 'win32':
+    signal.signal(signal.SIGBREAK, _raise_keyboard_interrupt)
 
 
 def _kb_watcher():

@@ -164,8 +164,11 @@ def status():
 def stop_plot():
     if err := _ensure_plotting():
         return err
-    print(f"[stop] sending SIGINT to PID {_plot_proc.pid}")
-    _plot_proc.send_signal(signal.SIGINT)
+    # subprocess.Popen.send_signal() on Windows only accepts SIGTERM,
+    # CTRL_C_EVENT or CTRL_BREAK_EVENT — plain SIGINT raises ValueError there.
+    sig = signal.CTRL_BREAK_EVENT if sys.platform == 'win32' else signal.SIGINT
+    print(f"[stop] sending {sig!r} to PID {_plot_proc.pid}")
+    _plot_proc.send_signal(sig)
     return jsonify({'status': 'stopped'})
 
 
@@ -214,10 +217,16 @@ def print_page():
     print(f"[print] plot.py: {' '.join(plot_cmd)}")
     global _plot_last_line
     _plot_last_line = ''
+    # New process group on Windows so CTRL_BREAK_EVENT (sent from /stop) only
+    # reaches plot.py, not this Flask server sharing the same console.
+    popen_kwargs = {}
+    if sys.platform == 'win32':
+        popen_kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
     _plot_proc = subprocess.Popen(
         plot_cmd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        **popen_kwargs,
     )
     threading.Thread(target=_watch_plot_output, args=(_plot_proc,), daemon=True).start()
     return jsonify({'status': 'printing', 'page': page_num, 'pid': _plot_proc.pid})
