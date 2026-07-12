@@ -259,8 +259,8 @@
   </span>
 
   <span style="margin-left:16px;">
-    <label for="start-line">Start line:</label>
-    <input type="number" id="start-line" value="0" min="0" max="999">
+    <label for="skip-lines">Пропустити рядків:</label>
+    <input type="number" id="skip-lines" value="0" min="0" max="999">
   </span>
 
   <span style="margin-left:16px;">
@@ -327,7 +327,7 @@ const MARGIN_RIGHT  = {{ cfg.margin_right }};
 const EDITOR_WIDTH_KEY = 'plotter-editor-pane-width';
 const EDITOR_TEXT_KEY  = 'plotter-editor-text';
 const EDITOR_PAGE_KEY  = 'plotter-editor-page';
-const EDITOR_SLINE_KEY = 'plotter-editor-start-line';
+const EDITOR_SKIP_KEY  = 'plotter-editor-skip-lines';
 const EDITOR_GRID_KEY  = 'plotter-editor-grid-visible';
 
 // ---------------------------------------------------------------------------
@@ -344,7 +344,7 @@ let statusInterval = null;
 // DOM refs
 // ---------------------------------------------------------------------------
 const editorEl     = document.getElementById('editor');
-const startLineEl  = document.getElementById('start-line');
+const skipLinesEl  = document.getElementById('skip-lines');
 const gridToggleEl = document.getElementById('grid-toggle');
 const statusEl     = document.getElementById('status');
 const svgContainer = document.getElementById('svg-container');
@@ -365,8 +365,8 @@ const editorPane   = document.getElementById('editor-pane');
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function getStartLine() {
-  return parseInt(startLineEl.value, 10) || 0;
+function getSkipLines() {
+  return parseInt(skipLinesEl.value, 10) || 0;
 }
 
 async function apiPost(endpoint, data) {
@@ -556,7 +556,7 @@ window.addEventListener('resize', sizeSvgContainer);
 async function fetchLayout() {
   setStatus('layout…', 'busy');
   try {
-    const d = await apiPost('/layout', { text: editorEl.value, start_line: getStartLine() });
+    const d = await apiPost('/layout', { text: editorEl.value, skip_lines: getSkipLines() });
     totalPages  = d.total_pages;
     svgCache    = {};
     currentPage = Math.min(currentPage, Math.max(totalPages, 1));
@@ -576,7 +576,7 @@ async function fetchPageSvg(pageNum) {
   }
   setStatus('рендер…', 'busy');
   try {
-    const d = await apiPost('/page', { text: editorEl.value, start_line: getStartLine(), page_num: pageNum });
+    const d = await apiPost('/page', { text: editorEl.value, skip_lines: getSkipLines(), page_num: pageNum });
     svgCache[pageNum] = d.svg;
     if (d.total_pages) { totalPages = d.total_pages; updateNavButtons(); }
     setStatus(`${totalPages} стор.`, 'ok');
@@ -595,8 +595,8 @@ editorEl.addEventListener('input', () => {
   debounceTimer = setTimeout(fetchLayout, 400);
 });
 
-startLineEl.addEventListener('change', () => {
-  localStorage.setItem(EDITOR_SLINE_KEY, startLineEl.value);
+skipLinesEl.addEventListener('change', () => {
+  localStorage.setItem(EDITOR_SKIP_KEY, skipLinesEl.value);
   svgCache = {};
   fetchLayout();
 });
@@ -613,7 +613,7 @@ btnPrint.addEventListener('click', async () => {
   printStatus.textContent = 'Генерую G-code…';
   printStatus.className   = '';
   try {
-    const d = await apiPost('/print', { text: editorEl.value, page_num: currentPage, start_line: getStartLine() });
+    const d = await apiPost('/print', { text: editorEl.value, page_num: currentPage, skip_lines: getSkipLines() });
     if (d.status === 'printing') {
       printStatus.textContent = `Друкую стор. ${d.page}…`;
       printStatus.className   = 'ok';
@@ -691,12 +691,12 @@ document.addEventListener('keydown', e => {
 // Init — restore saved state
 // ---------------------------------------------------------------------------
 const savedText  = localStorage.getItem(EDITOR_TEXT_KEY);
-const savedSline = parseInt(localStorage.getItem(EDITOR_SLINE_KEY), 10) || 0;
+const savedSkip  = parseInt(localStorage.getItem(EDITOR_SKIP_KEY), 10) || 0;
 const savedWidth = localStorage.getItem(EDITOR_WIDTH_KEY);
 const savedGrid  = localStorage.getItem(EDITOR_GRID_KEY);
 
 if (savedText)  editorEl.value    = savedText;
-if (savedSline) startLineEl.value = savedSline;
+if (savedSkip) skipLinesEl.value = savedSkip;
 currentPage = parseInt(localStorage.getItem(EDITOR_PAGE_KEY), 10) || 1;
 
 svgContainer.insertBefore(buildGridOverlaySvg(), svgContainer.firstChild);

@@ -111,9 +111,9 @@ python text_to_gcode.py poem.txt --font fonts/myfont_centerline/myfont_centerlin
 python text_to_gcode.py poem.txt --font fonts/myfont_centerline/myfont_centerline.svg \
     --output-dir ./output --prefix poem
 
-# Продовжити з рядка N на першій сторінці (папір скінчився посередині)
+# Пропустити перші N рядків на першій сторінці (папір скінчився посередині)
 python text_to_gcode.py poem.txt --font fonts/myfont_centerline/myfont_centerline.svg \
-    --start-line 12
+    --skip-lines 12
 ```
 
 **Параметри:**
@@ -133,7 +133,7 @@ python text_to_gcode.py poem.txt --font fonts/myfont_centerline/myfont_centerlin
 | `--font PATH` | *(обов'язковий)* | Шлях до Hershey SVG-шрифту |
 | `--output-dir DIR` | `.` | Папка для файлів виводу |
 | `--prefix NAME` | `page` | Префікс імен файлів |
-| `--start-line N` | `0` | Пропустити перші N рядків на першій сторінці |
+| `--skip-lines N` | `0` | Пропустити перші N рядків на першій сторінці |
 | `--svg-only` | — | Тільки SVG, без G-code |
 
 > **Ландшафт:** папір лежить на плотері портретно як завжди. Скрипт повертає вміст на 90° проти годинникової стрілки всередині SVG. Щоб прочитати надрукований текст — поверни аркуш на 90° проти годинникової стрілки. Усі відступи вказуються в орієнтації читання.

@@ -6,7 +6,7 @@ Usage:
     python editor.py --font ../fonts/myfont_centerline/myfont_centerline.svg [options]
 
 All layout options mirror text_to_gcode.py. Font and settings are fixed at
-startup; only the text and start-line change at runtime.
+startup; only the text and skip-lines change at runtime.
 """
 
 import sys
@@ -39,20 +39,20 @@ CFG = {}       # layout parameters (margins, size, etc.)
 FONT_DATA = {} # {'glyphs': ..., 'font_face': ..., 'fallback_advance': ..., 'scale': ...}
 _plot_proc    = None  # currently running plot.py subprocess
 _plot_last_line = ''  # last stdout line from plot.py
-_pages_cache  = {}    # (text, start_line) → pages list
+_pages_cache  = {}    # (text, skip_lines) → pages list
 
 
 # ---------------------------------------------------------------------------
 # Layout helpers
 # ---------------------------------------------------------------------------
 
-def _compute_pages(text: str, start_line: int) -> list:
+def _compute_pages(text: str, skip_lines: int) -> list:
     """Run wrap → adjust → paginate. Returns list of pages (no SVG rendered).
 
-    Results are cached by (text, start_line) so that navigating pages
+    Results are cached by (text, skip_lines) so that navigating pages
     doesn't re-run the layout pipeline when nothing has changed.
     """
-    key = (text, start_line)
+    key = (text, skip_lines)
     if key in _pages_cache:
         return _pages_cache[key]
 
@@ -67,8 +67,8 @@ def _compute_pages(text: str, start_line: int) -> list:
                           letter_spacing=letter_spacing)
     all_lines = adjust_keyword_lines(all_lines, extra_indent=space_w * 2)
 
-    if start_line:
-        first_cap = lines_per_page - start_line
+    if skip_lines:
+        first_cap = lines_per_page - skip_lines
         pages = [all_lines[:first_cap]] + split_pages(all_lines[first_cap:], lines_per_page)
     else:
         pages = split_pages(all_lines, lines_per_page)
@@ -79,7 +79,7 @@ def _compute_pages(text: str, start_line: int) -> list:
     return pages
 
 
-def _render_page(pages: list, page_num: int, start_line: int) -> str:
+def _render_page(pages: list, page_num: int, skip_lines: int) -> str:
     """Render a single page (1-indexed) to SVG string."""
     if page_num < 1 or page_num > len(pages):
         return ''
@@ -96,7 +96,7 @@ def _render_page(pages: list, page_num: int, start_line: int) -> str:
         layout_height    = CFG['layout_h'],
         fallback_advance = FONT_DATA['fallback_advance'],
         landscape        = CFG['landscape'],
-        line_offset      = start_line if page_num == 1 else 0,
+        line_offset      = skip_lines if page_num == 1 else 0,
         letter_spacing   = CFG['letter_spacing'],
     )
 
@@ -136,8 +136,8 @@ def index():
 @app.post('/layout')
 def layout():
     """Fast path: wrap + paginate only. Returns total page count."""
-    text, start_line = _parse_request('text', 'start_line')
-    pages = _compute_pages(text, start_line)
+    text, skip_lines = _parse_request('text', 'skip_lines')
+    pages = _compute_pages(text, skip_lines)
     return jsonify({
         'total_pages':    len(pages),
         'lines_per_page': CFG['lines_per_page'],
@@ -148,9 +148,9 @@ def layout():
 @app.post('/page')
 def page():
     """Render a single page to SVG."""
-    text, page_num, start_line = _parse_request('text', 'page_num', 'start_line')
-    pages = _compute_pages(text, start_line)
-    return jsonify({'svg': _render_page(pages, page_num, start_line),
+    text, page_num, skip_lines = _parse_request('text', 'page_num', 'skip_lines')
+    pages = _compute_pages(text, skip_lines)
+    return jsonify({'svg': _render_page(pages, page_num, skip_lines),
                     'total_pages': len(pages)})
 
 
@@ -191,12 +191,12 @@ def print_page():
     if _plot_proc and _plot_proc.poll() is None:
         return jsonify({'status': 'error', 'message': 'Already printing'}), 409
 
-    text, page_num, start_line = _parse_request('text', 'page_num', 'start_line')
-    pages = _compute_pages(text, start_line)
+    text, page_num, skip_lines = _parse_request('text', 'page_num', 'skip_lines')
+    pages = _compute_pages(text, skip_lines)
     if page_num < 1 or page_num > len(pages):
         return jsonify({'status': 'error', 'message': f'Page {page_num} does not exist'}), 400
 
-    svg = _render_page(pages, page_num, start_line)
+    svg = _render_page(pages, page_num, skip_lines)
 
     tmp_dir    = Path(tempfile.gettempdir())
     svg_path   = tmp_dir / f'editor_page_{page_num:04d}.svg'

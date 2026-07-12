@@ -453,7 +453,7 @@ def main():
                         help='Directory for output files')
     parser.add_argument('--prefix', default='page',
                         help='Filename prefix for output files')
-    parser.add_argument('--start-line', type=int, default=0, metavar='N',
+    parser.add_argument('--skip-lines', type=int, default=0, metavar='N',
                         help='Skip first N lines on page 1 (continue on partially filled page)')
     parser.add_argument('--svg-only', action='store_true',
                         help='Generate SVG files only, skip GCode conversion')
@@ -504,19 +504,19 @@ def main():
           f"{lines_per_page} lines/page")
 
     # ── Wrap & paginate ────────────────────────────────────────────────────
-    start_line = args.start_line
+    skip_lines = args.skip_lines
     letter_spacing = args.size * 0.1
     all_lines = wrap_text(text, text_width, glyphs, scale, fallback_advance, letter_spacing=letter_spacing)
     space_w = (glyphs[' ']['advance'] if ' ' in glyphs else fallback_advance) * scale + letter_spacing
     all_lines = adjust_keyword_lines(all_lines, extra_indent=space_w * 2)
-    if start_line:
-        first_cap = lines_per_page - start_line
+    if skip_lines:
+        first_cap = lines_per_page - skip_lines
         pages = [all_lines[:first_cap]] + split_pages(all_lines[first_cap:], lines_per_page)
     else:
         pages = split_pages(all_lines, lines_per_page)
-    if start_line:
+    if skip_lines:
         print(f"Lines: {len(all_lines)} total → {len(pages)} page(s)  "
-              f"(page 1 starts from line {start_line})")
+              f"(page 1 starts from line {skip_lines})")
     else:
         print(f"Lines: {len(all_lines)} total → {len(pages)} page(s)")
 
@@ -543,7 +543,7 @@ def main():
             layout_height  = layout_h,
             fallback_advance = fallback_advance,
             landscape      = landscape,
-            line_offset    = start_line if page_num == 1 else 0,
+            line_offset    = skip_lines if page_num == 1 else 0,
             letter_spacing = letter_spacing,
         )
         svg_path.write_text(svg, encoding='utf-8')
