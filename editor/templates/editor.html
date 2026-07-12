@@ -107,6 +107,7 @@
   }
 
   #svg-container {
+    position: relative;
     background: #fff;
     box-shadow: 0 2px 16px rgba(0,0,0,.6);
     display: flex;
@@ -119,6 +120,19 @@
     display: block;
     width: 100%;
     height: 100%;
+  }
+  #svg-container svg.content,
+  #grid-overlay {
+    position: absolute;
+    inset: 0;
+  }
+  #grid-overlay {
+    z-index: 0;
+    pointer-events: none;
+  }
+  #grid-overlay.hidden { display: none; }
+  #svg-container svg.content {
+    z-index: 1;
   }
   #svg-container path {
     vector-effect: non-scaling-stroke;
@@ -249,6 +263,11 @@
     <input type="number" id="start-line" value="0" min="0" max="999">
   </span>
 
+  <span style="margin-left:16px;">
+    <label for="grid-toggle">Сітка:</label>
+    <input type="checkbox" id="grid-toggle" checked>
+  </span>
+
   <span id="status">—</span>
 </div>
 
@@ -295,6 +314,12 @@
 const LANDSCAPE  = {{ 'true' if cfg.orientation == 'landscape' else 'false' }};
 const SVG_PHYS_W = {{ cfg.layout_h if cfg.orientation == 'landscape' else cfg.layout_w }};
 const SVG_PHYS_H = {{ cfg.layout_w if cfg.orientation == 'landscape' else cfg.layout_h }};
+const LAYOUT_W      = {{ cfg.layout_w }};
+const LAYOUT_H      = {{ cfg.layout_h }};
+const MARGIN_TOP    = {{ cfg.margin_top }};
+const MARGIN_BOTTOM = {{ cfg.margin_bottom }};
+const MARGIN_LEFT   = {{ cfg.margin_left }};
+const MARGIN_RIGHT  = {{ cfg.margin_right }};
 
 // ---------------------------------------------------------------------------
 // localStorage keys
@@ -303,6 +328,7 @@ const EDITOR_WIDTH_KEY = 'plotter-editor-pane-width';
 const EDITOR_TEXT_KEY  = 'plotter-editor-text';
 const EDITOR_PAGE_KEY  = 'plotter-editor-page';
 const EDITOR_SLINE_KEY = 'plotter-editor-start-line';
+const EDITOR_GRID_KEY  = 'plotter-editor-grid-visible';
 
 // ---------------------------------------------------------------------------
 // State
@@ -319,6 +345,7 @@ let statusInterval = null;
 // ---------------------------------------------------------------------------
 const editorEl     = document.getElementById('editor');
 const startLineEl  = document.getElementById('start-line');
+const gridToggleEl = document.getElementById('grid-toggle');
 const statusEl     = document.getElementById('status');
 const svgContainer = document.getElementById('svg-container');
 const svgPlaceholder = document.getElementById('svg-placeholder');
@@ -368,7 +395,7 @@ function updateNavButtons() {
 
 function showSvg(svg) {
   svgPlaceholder.style.display = 'none';
-  const old = svgContainer.querySelector('svg');
+  const old = svgContainer.querySelector('svg.content');
   if (old) old.remove();
   if (!svg) {
     svgPlaceholder.style.display = '';
@@ -377,6 +404,7 @@ function showSvg(svg) {
   }
   const doc   = new DOMParser().parseFromString(svg, 'image/svg+xml');
   const svgEl = doc.documentElement;
+  svgEl.classList.add('content');
   svgEl.setAttribute('width',  '100%');
   svgEl.setAttribute('height', '100%');
   svgContainer.appendChild(svgEl);
@@ -410,6 +438,89 @@ function navigateTo(n) {
   localStorage.setItem(EDITOR_PAGE_KEY, currentPage);
   fetchPageSvg(currentPage);
 }
+
+// ---------------------------------------------------------------------------
+// Grid overlay — plotter-bed ruler + margin outline
+// ---------------------------------------------------------------------------
+// Built once in physical (portrait) coordinates — the same space the printed
+// text SVG uses (SVG_PHYS_W × SVG_PHYS_H). In landscape mode the existing
+// CSS rotate(90deg) on #svg-container reorients it along with the text, so
+// no separate landscape branch is needed here.
+const GRID_STEP      = 10;    // mm (1cm)
+const GRID_COLOR     = '#bbb';
+const BOX_COLOR      = GRID_COLOR;
+const LABEL_COLOR     = '#555';
+const LABEL_FONT_SIZE = 4.5;  // mm
+const LABEL_GAP       = 2;    // mm, gap from canvas edge / tick line
+const LABEL_BASELINE  = LABEL_GAP + LABEL_FONT_SIZE * 0.75;
+
+function computeMarginBoxPhysical() {
+  if (LANDSCAPE) {
+    return {
+      x: MARGIN_TOP,
+      y: MARGIN_RIGHT,
+      w: LAYOUT_H - MARGIN_TOP  - MARGIN_BOTTOM,
+      h: LAYOUT_W - MARGIN_LEFT - MARGIN_RIGHT,
+    };
+  }
+  return {
+    x: MARGIN_LEFT,
+    y: MARGIN_TOP,
+    w: LAYOUT_W - MARGIN_LEFT - MARGIN_RIGHT,
+    h: LAYOUT_H - MARGIN_TOP  - MARGIN_BOTTOM,
+  };
+}
+
+function buildGridOverlaySvg() {
+  const W = SVG_PHYS_W, H = SVG_PHYS_H;
+  const box = computeMarginBoxPhysical();
+
+  let lines = '', xLabels = '', yLabels = '';
+  for (let x = 0, i = 0; x <= W + 0.01; x += GRID_STEP, i++) {
+    lines   += `<line x1="${x}" y1="0" x2="${x}" y2="${H}"/>`;
+    xLabels += `<text x="${x + LABEL_GAP}" y="${LABEL_BASELINE}">${i}</text>`;
+  }
+  // Skip the y=0 label — the x-axis "0" already marks the shared top-left corner.
+  for (let y = 0, i = 0; y <= H + 0.01; y += GRID_STEP, i++) {
+    lines += `<line x1="0" y1="${y}" x2="${W}" y2="${y}"/>`;
+    if (i > 0) yLabels += `<text x="${LABEL_GAP}" y="${y + LABEL_BASELINE}">${i}</text>`;
+  }
+
+  // Clip the grid to everything outside the margin box (evenodd hole).
+  const clipD = `M0,0 H${W} V${H} H0 Z M${box.x},${box.y} H${box.x + box.w} V${box.y + box.h} H${box.x} Z`;
+
+  const doc = new DOMParser().parseFromString(`
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}">
+      <defs>
+        <clipPath id="grid-clip" clipPathUnits="userSpaceOnUse">
+          <path d="${clipD}" clip-rule="evenodd"/>
+        </clipPath>
+      </defs>
+      <g clip-path="url(#grid-clip)">
+        <g stroke="${GRID_COLOR}" stroke-width="0.2">${lines}</g>
+        <g fill="${LABEL_COLOR}" font-size="${LABEL_FONT_SIZE}" font-family="monospace">${xLabels}${yLabels}</g>
+      </g>
+      <rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}"
+            fill="none" stroke="${BOX_COLOR}" stroke-width="0.4"/>
+    </svg>
+  `, 'image/svg+xml');
+
+  const svgEl = doc.documentElement;
+  svgEl.id = 'grid-overlay';
+  svgEl.setAttribute('width',  '100%');
+  svgEl.setAttribute('height', '100%');
+  return svgEl;
+}
+
+function setGridVisible(visible) {
+  const el = document.getElementById('grid-overlay');
+  if (el) el.classList.toggle('hidden', !visible);
+}
+
+gridToggleEl.addEventListener('change', () => {
+  localStorage.setItem(EDITOR_GRID_KEY, gridToggleEl.checked ? '1' : '0');
+  setGridVisible(gridToggleEl.checked);
+});
 
 // ---------------------------------------------------------------------------
 // SVG container sizing
@@ -582,10 +693,15 @@ document.addEventListener('keydown', e => {
 const savedText  = localStorage.getItem(EDITOR_TEXT_KEY);
 const savedSline = parseInt(localStorage.getItem(EDITOR_SLINE_KEY), 10) || 0;
 const savedWidth = localStorage.getItem(EDITOR_WIDTH_KEY);
+const savedGrid  = localStorage.getItem(EDITOR_GRID_KEY);
 
 if (savedText)  editorEl.value    = savedText;
 if (savedSline) startLineEl.value = savedSline;
 currentPage = parseInt(localStorage.getItem(EDITOR_PAGE_KEY), 10) || 1;
+
+svgContainer.insertBefore(buildGridOverlaySvg(), svgContainer.firstChild);
+gridToggleEl.checked = (savedGrid !== '0');
+setGridVisible(gridToggleEl.checked);
 
 requestAnimationFrame(() => {
   if (savedWidth) editorPane.style.width = savedWidth;
