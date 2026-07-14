@@ -88,7 +88,25 @@ _LIST_MARKER = re.compile(r'^\s*(\d+\.)+\d*\s+')
 
 _KEYWORD_PREFIXES = ('БОЙОВЕ РОЗПОРЯДЖЕННЯ', 'БОЙОВИЙ НАКАЗ')
 
-_DATE_PREFIX = '--дата '
+
+class Label(NamedTuple):
+    """Config for one '--name ...' side-annotation directive.
+
+    offset : mm from the text-area edge, outward into the page margin.
+             Negative = from margin_left (left margin); positive = from margin_right.
+    width  : max mm width before the annotation's own text wraps to another line.
+    """
+    offset: float
+    width: float
+
+
+def parse_label_args(label_strs: list[str]) -> dict[str, Label]:
+    """Parse repeated '--label NAME:OFFSET:WIDTH' CLI values into {name: Label}."""
+    labels = {}
+    for spec in label_strs or []:
+        name, offset, width = spec.rsplit(':', 2)
+        labels[name] = Label(offset=float(offset), width=float(width))
+    return labels
 
 
 class Line(NamedTuple):
@@ -96,11 +114,11 @@ class Line(NamedTuple):
 
     content : plain text string, or list[(name, x_offset_mm)] for a column row.
     indent  : left offset from margin_left, in mm.
-    date    : optional date string rendered to the left of this line.
+    labels  : {label_name: text} side-annotations anchored to this line's baseline.
     """
     content: str | list
     indent: float
-    date: str | None = None
+    labels: dict = {}
 
 
 # ---------------------------------------------------------------------------
@@ -130,12 +148,13 @@ def adjust_keyword_lines(lines: list[Line], extra_indent: float = 0.0) -> list[L
                         and i >= 2 and isinstance(result[i - 2].content, str)):
                     # "капітан" line before keyword → merge it onto the line above.
                     p2 = result[i - 2]
-                    result[i - 2] = Line(p2.content + ' ' + prev.content, p2.indent, p2.date or prev.date)
+                    result[i - 2] = Line(p2.content + ' ' + prev.content, p2.indent,
+                                         {**prev.labels, **p2.labels})
                     result.pop(i - 1)
                     continue                      # i unchanged → now points past keyword
                 words = prev.content.split()
                 if len(words) > 1:
-                    result[i - 1] = Line(' '.join(words[:-1]), prev.indent, prev.date)
+                    result[i - 1] = Line(' '.join(words[:-1]), prev.indent, prev.labels)
                     result.insert(i, Line(words[-1], prev.indent + extra_indent))
                     i += 2                       # skip inserted line + keyword
                     continue
@@ -146,7 +165,8 @@ def adjust_keyword_lines(lines: list[Line], extra_indent: float = 0.0) -> list[L
                 and i == len(result) - 1         # last line
                 and i > 0 and isinstance(result[i - 1].content, str)):
             prev = result[i - 1]
-            result[i - 1] = Line(prev.content + ' ' + item.content, prev.indent, prev.date or item.date)
+            result[i - 1] = Line(prev.content + ' ' + item.content, prev.indent,
+                                 {**item.labels, **prev.labels})
             result.pop(i)
             continue                              # i unchanged → recheck current slot
         i += 1
@@ -163,14 +183,37 @@ def measure_line(text: str, glyphs: dict, scale: float, fallback_advance: float,
     return width
 
 
+def wrap_words(text: str, max_width_mm: float, glyphs: dict, scale: float,
+              fallback_advance: float, letter_spacing: float = 0.0) -> list[str]:
+    """Word-wrap a plain string into lines that each fit within max_width_mm."""
+    space_w = (glyphs[' ']['advance'] if ' ' in glyphs else fallback_advance) * scale + letter_spacing
+    lines: list[str] = []
+    cur_words: list[str] = []
+    cur_width = 0.0
+    for word in text.split():
+        word_w = measure_line(word, glyphs, scale, fallback_advance, letter_spacing)
+        if not cur_words:
+            cur_words, cur_width = [word], word_w
+        elif cur_width + space_w + word_w <= max_width_mm:
+            cur_words.append(word)
+            cur_width += space_w + word_w
+        else:
+            lines.append(' '.join(cur_words))
+            cur_words, cur_width = [word], word_w
+    if cur_words:
+        lines.append(' '.join(cur_words))
+    return lines
+
+
 def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
-              fallback_advance: float, letter_spacing: float = 0.0) -> list[Line]:
+              fallback_advance: float, letter_spacing: float = 0.0,
+              labels: dict[str, Label] | None = None) -> list[Line]:
     """Word-wrap text into lines that fit within max_width_mm.
 
     Returns a list of Line objects. Each Line has:
       .content : str (text) or list[(name, x_offset_mm)] for a column row.
       .indent  : left offset from margin_left, in mm.
-      .date    : optional date string from a preceding '--дата ...' directive.
+      .labels  : {name: text} side-annotations from preceding '--name ...' directives.
 
     List items ("1. ", "1.2 ", etc.):
       - First line starts at margin (indent=0).
@@ -182,14 +225,18 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
       - A blank line or any line with indent ≤ the marker closes the block.
       - Names are arranged into as many columns as the available width allows.
 
-    Date directives ('--дата DATE'):
+    Label directives ('--name TEXT', name declared via the --label CLI flag):
       - Removed from the main text flow.
-      - DATE is stored in .date on the next non-blank line.
+      - TEXT is stored under .labels[name] on the next non-blank line.
+      - A repeated directive for the same name overwrites the pending value.
+      - Directives for names not declared via --label are left as plain text.
 
     The 'extra' indent (2 space widths) visually distinguishes wrapped lines
     from new sentences at the same indent level, and positions name columns
     visually inside the list item text.
     """
+    labels = labels or {}
+    label_prefixes = {name: f'--{name} ' for name in labels}
     all_lines: list[Line] = []
     space_w = (glyphs[' ']['advance'] if ' ' in glyphs else fallback_advance) * scale + letter_spacing
     extra_mm = space_w * 2   # extra indent for wrapped/continuation lines
@@ -198,15 +245,15 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
     name_buffer: list[str] = []
     in_names_block    = False
     names_block_indent = 0    # leading-space count of the --імена marker line
-    pending_date: str | None = None  # date annotation for the next content line
+    pending_labels: dict[str, str] = {}  # label annotations for the next content line
 
     def append_line(content, indent, *, is_blank: bool = False) -> None:
-        nonlocal pending_date
+        nonlocal pending_labels
         if is_blank:
             all_lines.append(Line(content, indent))
         else:
-            all_lines.append(Line(content, indent, pending_date))
-            pending_date = None
+            all_lines.append(Line(content, indent, pending_labels))
+            pending_labels = {}
 
     def flush_names() -> None:
         if not name_buffer:
@@ -219,7 +266,7 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
         for i in range(0, len(name_buffer), n_cols):
             row = name_buffer[i : i + n_cols]
             items = [(name, indent + j * (col_w + col_gap)) for j, name in enumerate(row)]
-            all_lines.append(Line(items, 0.0))  # column rows never carry a date
+            all_lines.append(Line(items, 0.0))  # column rows never carry labels
         name_buffer.clear()
 
     def reflow(para: str, first_indent: float, cont_indent: float) -> None:
@@ -271,8 +318,10 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
             in_names_block = False
             flush_names()
 
-        if stripped.startswith(_DATE_PREFIX):
-            pending_date = stripped[len(_DATE_PREFIX):]
+        matched_label = next((name for name, prefix in label_prefixes.items()
+                              if stripped.startswith(prefix)), None)
+        if matched_label is not None:
+            pending_labels = {**pending_labels, matched_label: stripped[len(label_prefixes[matched_label]):]}
             continue
 
         if m:
@@ -325,11 +374,18 @@ def split_pages(lines: list, lines_per_page: int) -> list[list]:
 
 def render_svg(page_lines: list[Line], glyphs: dict, font_face: dict,
                font_size_mm: float, line_height_mm: float, line_gap_mm: float,
-               margin_left: float, margin_top: float,
+               margin_left: float, margin_right: float, margin_top: float,
                layout_width: float, layout_height: float,
                fallback_advance: float, landscape: bool = False,
-               line_offset: int = 0, letter_spacing: float = 0.0) -> str:
+               line_offset: int = 0, letter_spacing: float = 0.0,
+               labels: dict[str, Label] | None = None) -> str:
     """Render one page of text as an SVG string.
+
+    labels : {name: Label(offset, width)} geometry for side-annotations found in
+              each line's .labels dict. offset < 0 is measured outward from
+              margin_left; offset >= 0 is measured outward from margin_right.
+              An annotation's own text word-wraps to further baselines (using
+              the same line advance) if it exceeds its configured width.
 
     layout_width/layout_height are the text-area dimensions in reading
     orientation (e.g. 297×210 for landscape A4).
@@ -355,12 +411,13 @@ def render_svg(page_lines: list[Line], glyphs: dict, font_face: dict,
     upm   = font_face['upm']
     scale = font_size_mm / upm
     advance = line_height_mm + line_gap_mm  # fixed per-line advance
+    labels = labels or {}
 
     path_els = []
     baseline_y = margin_top + line_height_mm + line_offset * advance
 
-    def render_chars(chars: str, start_x: float) -> None:
-        """Render a string of characters starting at start_x, appending to path_els."""
+    def render_chars(chars: str, start_x: float, y: float) -> None:
+        """Render a string of characters starting at start_x on baseline y."""
         cx = start_x
         for ch in chars:
             glyph = glyphs.get(ch)
@@ -372,9 +429,9 @@ def render_svg(page_lines: list[Line], glyphs: dict, font_face: dict,
                 s = scale
                 if landscape:
                     transform = (f"matrix(0,{-s:.6f},{-s:.6f},0,"
-                                 f"{baseline_y:.4f},{layout_width - cx:.4f})")
+                                 f"{y:.4f},{layout_width - cx:.4f})")
                 else:
-                    transform = (f"translate({cx:.4f},{baseline_y:.4f})"
+                    transform = (f"translate({cx:.4f},{y:.4f})"
                                  f" scale({s:.6f},{-s:.6f})")
                 path_els.append(
                     f'<path d="{glyph["d"]}" transform="{transform}"'
@@ -387,11 +444,19 @@ def render_svg(page_lines: list[Line], glyphs: dict, font_face: dict,
         if isinstance(line.content, list):
             # Column row: [(name, x_offset_from_margin), ...]
             for name, x_offset in line.content:
-                render_chars(name, margin_left + x_offset)
+                render_chars(name, margin_left + x_offset, baseline_y)
         else:
-            render_chars(line.content, margin_left + line.indent)
-        if line.date:
-            render_chars(line.date, max(0.0, margin_left - 32.0))
+            render_chars(line.content, margin_left + line.indent, baseline_y)
+        for name, text in line.labels.items():
+            label = labels.get(name)
+            if label is None:
+                continue
+            start_x = (margin_left + label.offset if label.offset < 0
+                       else layout_width - margin_right + label.offset)
+            label_y = baseline_y
+            for sub_line in wrap_words(text, label.width, glyphs, scale, fallback_advance, letter_spacing):
+                render_chars(sub_line, start_x, label_y)
+                label_y += advance
         baseline_y += advance
 
     body = "\n  ".join(path_els)
@@ -460,7 +525,13 @@ def main():
     parser.add_argument('--page', type=int, default=None, metavar='N',
                         help='Generate output only for page N (1-indexed). '
                              'By default all pages are generated.')
+    parser.add_argument('--label', action='append', metavar='NAME:OFFSET:WIDTH',
+                        help="Declare a '--NAME ...' side-annotation directive. "
+                             'OFFSET (mm) is outward from margin-left if negative, '
+                             'from margin-right if positive/zero. WIDTH (mm) is the '
+                             "annotation's own wrap width. Repeatable.")
     args = parser.parse_args()
+    labels = parse_label_args(args.label)
 
     if args.line_height is None:
         args.line_height = args.size * 1.5
@@ -506,7 +577,8 @@ def main():
     # ── Wrap & paginate ────────────────────────────────────────────────────
     skip_lines = args.skip_lines
     letter_spacing = args.size * 0.1
-    all_lines = wrap_text(text, text_width, glyphs, scale, fallback_advance, letter_spacing=letter_spacing)
+    all_lines = wrap_text(text, text_width, glyphs, scale, fallback_advance,
+                          letter_spacing=letter_spacing, labels=labels)
     space_w = (glyphs[' ']['advance'] if ' ' in glyphs else fallback_advance) * scale + letter_spacing
     all_lines = adjust_keyword_lines(all_lines, extra_indent=space_w * 2)
     if skip_lines:
@@ -538,6 +610,7 @@ def main():
             line_height_mm = args.line_height,
             line_gap_mm    = args.line_gap,
             margin_left    = args.margin_left,
+            margin_right   = args.margin_right,
             margin_top     = args.margin_top,
             layout_width   = layout_w,
             layout_height  = layout_h,
@@ -545,6 +618,7 @@ def main():
             landscape      = landscape,
             line_offset    = skip_lines if page_num == 1 else 0,
             letter_spacing = letter_spacing,
+            labels         = labels,
         )
         svg_path.write_text(svg, encoding='utf-8')
         print(f"  [{page_num}/{len(pages)}] SVG  → {svg_path}")

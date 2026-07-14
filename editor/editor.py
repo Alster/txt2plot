@@ -23,6 +23,7 @@ from flask import Flask, render_template, request, jsonify
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from text_to_gcode import (
     parse_svg_font,
+    parse_label_args,
     wrap_text,
     adjust_keyword_lines,
     split_pages,
@@ -64,7 +65,7 @@ def _compute_pages(text: str, skip_lines: int) -> list:
     lines_per_page   = CFG['lines_per_page']
 
     all_lines = wrap_text(text, CFG['text_width'], glyphs, scale, fallback_advance,
-                          letter_spacing=letter_spacing)
+                          letter_spacing=letter_spacing, labels=CFG['labels'])
     all_lines = adjust_keyword_lines(all_lines, extra_indent=space_w * 2)
 
     if skip_lines:
@@ -91,6 +92,7 @@ def _render_page(pages: list, page_num: int, skip_lines: int) -> str:
         line_height_mm   = CFG['line_height'],
         line_gap_mm      = CFG['line_gap'],
         margin_left      = CFG['margin_left'],
+        margin_right     = CFG['margin_right'],
         margin_top       = CFG['margin_top'],
         layout_width     = CFG['layout_w'],
         layout_height    = CFG['layout_h'],
@@ -98,6 +100,7 @@ def _render_page(pages: list, page_num: int, skip_lines: int) -> str:
         landscape        = CFG['landscape'],
         line_offset      = skip_lines if page_num == 1 else 0,
         letter_spacing   = CFG['letter_spacing'],
+        labels           = CFG['labels'],
     )
 
 
@@ -130,7 +133,9 @@ def _ensure_plotting():
 
 @app.get('/')
 def index():
-    return render_template('editor.html', cfg=CFG)
+    labels = [{'name': name, 'offset': label.offset, 'width': label.width}
+              for name, label in CFG['labels'].items()]
+    return render_template('editor.html', cfg=CFG, labels=labels)
 
 
 @app.post('/layout')
@@ -256,7 +261,11 @@ def main():
     parser.add_argument('--page-height', type=float, default=297.0, metavar='MM')
     parser.add_argument('--port', type=int, default=5000,
                         help='HTTP port to listen on')
+    parser.add_argument('--label', action='append', metavar='NAME:OFFSET:WIDTH',
+                        help="Declare a '--NAME ...' side-annotation directive "
+                             '(see text_to_gcode.py --help). Repeatable.')
     args = parser.parse_args()
+    labels = parse_label_args(args.label)
 
     if args.line_height is None:
         args.line_height = args.size * 1.5
@@ -299,6 +308,7 @@ def main():
         'text_width':     text_width,
         'text_height':    text_height,
         'letter_spacing': letter_spacing,
+        'labels':         labels,
         'lines_per_page': int(text_height / advance),
     })
 

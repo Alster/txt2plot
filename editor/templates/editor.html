@@ -320,6 +320,7 @@ const MARGIN_TOP    = {{ cfg.margin_top }};
 const MARGIN_BOTTOM = {{ cfg.margin_bottom }};
 const MARGIN_LEFT   = {{ cfg.margin_left }};
 const MARGIN_RIGHT  = {{ cfg.margin_right }};
+const LABELS        = {{ labels | tojson }};
 
 // ---------------------------------------------------------------------------
 // localStorage keys
@@ -451,6 +452,7 @@ const GRID_COLOR     = '#bbb';
 const BOX_COLOR      = GRID_COLOR;
 const LABEL_COLOR     = '#555';
 const LABEL_FONT_SIZE = 4.5;  // mm
+const LABEL_NAME_FONT_SIZE = LABEL_FONT_SIZE * 0.7;  // mm, --label name captions
 const LABEL_GAP       = 2;    // mm, gap from canvas edge / tick line
 const LABEL_BASELINE  = LABEL_GAP + LABEL_FONT_SIZE * 0.75;
 
@@ -471,9 +473,47 @@ function computeMarginBoxPhysical() {
   };
 }
 
+// Maps a (x, baseline_y) point in reading-orientation coordinates — the same
+// space render_svg's cx/baseline_y live in — to physical (portrait) coordinates.
+// Mirrors render_svg's landscape glyph transform matrix(0,-s,-s,0,baseline_y,layout_width-cx).
+function readingToPhysical(rx, ry) {
+  return LANDSCAPE ? { x: ry, y: LAYOUT_W - rx } : { x: rx, y: ry };
+}
+
+// Reading-space x where a label's own content starts (same formula as render_svg's start_x).
+function labelReadingXStart(label) {
+  return label.offset < 0 ? MARGIN_LEFT + label.offset
+                          : LAYOUT_W - MARGIN_RIGHT + label.offset;
+}
+
+// Box for one --label side-annotation, in physical coordinates.
+// Horizontal (reading) extent: [start_x, start_x + width], same formula as render_svg.
+// Vertical (reading) extent: margin_top .. layout_h - margin_bottom (full print area).
+function computeLabelBoxPhysical(label) {
+  const rxStart = labelReadingXStart(label);
+  const rxEnd = rxStart + label.width;
+  const p1 = readingToPhysical(rxStart, MARGIN_TOP);
+  const p2 = readingToPhysical(rxEnd, LAYOUT_H - MARGIN_BOTTOM);
+  return {
+    x: Math.min(p1.x, p2.x),
+    y: Math.min(p1.y, p2.y),
+    w: Math.abs(p2.x - p1.x),
+    h: Math.abs(p2.y - p1.y),
+  };
+}
+
+// Anchor for a label's name text: reading top-left corner, nudged out by LABEL_GAP.
+// In landscape this point is then read upright by counter-rotating the <text> -90°
+// against the container's own +90° CSS rotation — the same trick render_svg's glyph
+// matrix achieves per-character for the actual plotted content.
+function computeLabelNamePos(label) {
+  return readingToPhysical(labelReadingXStart(label), MARGIN_TOP - LABEL_GAP);
+}
+
 function buildGridOverlaySvg() {
   const W = SVG_PHYS_W, H = SVG_PHYS_H;
   const box = computeMarginBoxPhysical();
+  const labelBoxes = LABELS.map(l => computeLabelBoxPhysical(l));
 
   let lines = '', xLabels = '', yLabels = '';
   for (let x = 0, i = 0; x <= W + 0.01; x += GRID_STEP, i++) {
@@ -486,8 +526,20 @@ function buildGridOverlaySvg() {
     if (i > 0) yLabels += `<text x="${LABEL_GAP}" y="${y + LABEL_BASELINE}">${i}</text>`;
   }
 
-  // Clip the grid to everything outside the margin box (evenodd hole).
-  const clipD = `M0,0 H${W} V${H} H0 Z M${box.x},${box.y} H${box.x + box.w} V${box.y + box.h} H${box.x} Z`;
+  // Clip the grid to everything outside the margin box and label boxes (evenodd holes).
+  const holeD = ({x, y, w, h}) => `M${x},${y} H${x + w} V${y + h} H${x} Z`;
+  const clipD = `M0,0 H${W} V${H} H0 Z ${holeD(box)} `
+              + labelBoxes.map(holeD).join(' ');
+
+  let labelBoxEls = '', labelNameEls = '';
+  for (let i = 0; i < LABELS.length; i++) {
+    const label = LABELS[i], b = labelBoxes[i];
+    labelBoxEls += `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}"
+                          fill="none" stroke="${BOX_COLOR}" stroke-width="0.4"/>`;
+    const p = computeLabelNamePos(label);
+    const rot = LANDSCAPE ? ` transform="rotate(-90 ${p.x} ${p.y})"` : '';
+    labelNameEls += `<text x="${p.x}" y="${p.y}"${rot}>${label.name}</text>`;
+  }
 
   const doc = new DOMParser().parseFromString(`
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}">
@@ -502,6 +554,8 @@ function buildGridOverlaySvg() {
       </g>
       <rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}"
             fill="none" stroke="${BOX_COLOR}" stroke-width="0.4"/>
+      ${labelBoxEls}
+      <g fill="${LABEL_COLOR}" font-size="${LABEL_NAME_FONT_SIZE}" font-family="monospace">${labelNameEls}</g>
     </svg>
   `, 'image/svg+xml');
 
