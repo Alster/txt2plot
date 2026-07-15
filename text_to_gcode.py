@@ -292,6 +292,9 @@ def wrap_text(text: str, max_width_mm: float, glyphs: dict, scale: float,
             append_line(' '.join(cur_words), first_indent if first_line else cont_indent)
 
     for paragraph in text.split('\n'):
+        # Tabs count as indentation too; expand to the project's 4-space unit
+        # so tab-indented and space-indented sources produce identical layout.
+        paragraph = paragraph.expandtabs(4)
         if not paragraph.strip():
             flush_names()
             in_names_block = False
