@@ -87,6 +87,7 @@ def parse_svg_font(font_path: str) -> tuple[dict, dict]:
 _LIST_MARKER = re.compile(r'^\s*(\d+\.)+\d*\s+')
 
 _KEYWORD_PREFIXES = ('БОЙОВЕ РОЗПОРЯДЖЕННЯ', 'БОЙОВИЙ НАКАЗ')
+_RANK_PREFIXES = ('капітан', 'лейтенант')
 
 
 class Label(NamedTuple):
@@ -144,9 +145,9 @@ def adjust_keyword_lines(lines: list[Line], extra_indent: float = 0.0) -> list[L
                 and (i + 1) % 2 == 0):          # 1-indexed even position
             if i > 0 and isinstance(result[i - 1].content, str):
                 prev = result[i - 1]
-                if (prev.content.lower().startswith('капітан')
+                if (prev.content.lower().startswith(_RANK_PREFIXES)
                         and i >= 2 and isinstance(result[i - 2].content, str)):
-                    # "капітан" line before keyword → merge it onto the line above.
+                    # rank line (капітан/лейтенант) before keyword → merge it onto the line above.
                     p2 = result[i - 2]
                     result[i - 2] = Line(p2.content + ' ' + prev.content, p2.indent,
                                          {**prev.labels, **p2.labels})
@@ -158,9 +159,9 @@ def adjust_keyword_lines(lines: list[Line], extra_indent: float = 0.0) -> list[L
                     result.insert(i, Line(words[-1], prev.indent + extra_indent))
                     i += 2                       # skip inserted line + keyword
                     continue
-        # "капітан" on an odd (1-indexed) line and it is the last line → merge onto the previous line.
+        # rank line (капітан/лейтенант) on an odd (1-indexed) line and it is the last line → merge onto the previous line.
         if (isinstance(item.content, str)
-                and item.content.lower().startswith('капітан')
+                and item.content.lower().startswith(_RANK_PREFIXES)
                 and (i + 1) % 2 != 0             # 1-indexed odd position
                 and i == len(result) - 1         # last line
                 and i > 0 and isinstance(result[i - 1].content, str)):
